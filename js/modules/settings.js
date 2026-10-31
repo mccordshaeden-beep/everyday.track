@@ -10,7 +10,7 @@ export const glyph = 'settings';
 
 export const DEFAULT_TABS = ['today', 'tasks', 'food', 'money'];
 const UI_ID = 'settings:ui';
-const ALWAYS_ON = ['today', 'settings', 'more'];
+const ALWAYS_ON = ['today', 'settings', 'more', 'search'];
 
 /** Is this screen turned on for the signed-in person? (Settings → Your trackers) */
 export function isOn(id) {
@@ -93,6 +93,25 @@ function tabsCard(ctx) {
     })));
 }
 
+/** Light / dark / follow the device. Saved per device, since a phone and a laptop may want different looks. */
+export function applyTheme() {
+  let t = 'auto';
+  try { t = localStorage.getItem('everyday:theme') || 'auto'; } catch {}
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.dataset.theme = t;
+  const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', dark ? '#111311' : '#f5f4ef'));
+}
+
+function appearanceCard(ctx) {
+  let t = 'auto';
+  try { t = localStorage.getItem('everyday:theme') || 'auto'; } catch {}
+  return card('Appearance', {},
+    h('p', { class: 'muted' }, 'Choose a look for this device.'),
+    h('div', { class: 'seg', style: { marginTop: '10px' } }, [['auto', 'Match device'], ['light', 'Light'], ['dark', 'Dark']].map(([v, label]) =>
+      h('button', { type: 'button', class: v === t ? 'on' : '', onclick: () => { try { localStorage.setItem('everyday:theme', v); } catch {} applyTheme(); ctx.rerender(); } }, label))));
+}
+
 function backupCard() {
   const file = h('input', {
     type: 'file', accept: 'application/json,.json', hidden: true,
@@ -129,7 +148,7 @@ function installCard() {
 export function render(root, ctx) {
   root.append(pageHead('Settings'));
   root.append(h('div', { class: 'grid' },
-    syncCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
+    syncCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
     card('This device', {},
       h('p', { class: 'muted' }, 'Erase removes the data stored on this device only. If you are signed in, it downloads again on the next sync.'),
       btn('Erase data on this device', () => {

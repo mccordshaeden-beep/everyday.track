@@ -12,9 +12,11 @@ import * as money from './money.js';
 import * as habits from './habits.js';
 import * as chores from './chores.js';
 import * as school from './school.js';
+import * as workouts from './workouts.js';
+import * as search from './search.js';
 import * as notes from './notes.js';
 import * as settings from './settings.js';
 import * as more from './more.js';
 
-export const modules = [today, tasks, calendar, school, food, money, chores, habits, notes, settings, more];
+export const modules = [today, search, tasks, calendar, school, food, money, chores, habits, workouts, notes, settings, more];
 export const byId = Object.fromEntries(modules.map(m => [m.id, m]));

@@ -6,12 +6,12 @@
 // new version, close and reopen the app (sometimes twice) to see it.
 // Bump CACHE when you add or rename files so old copies get cleaned up.
 
-const CACHE = 'everyday-v4';
+const CACHE = 'everyday-v5';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/login.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/config.js',
   'js/modules/index.js', 'js/modules/today.js', 'js/modules/tasks.js', 'js/modules/calendar.js',
-  'js/modules/food.js', 'js/modules/money.js', 'js/modules/habits.js', 'js/modules/notes.js', 'js/modules/chores.js', 'js/modules/school.js',
+  'js/modules/food.js', 'js/modules/money.js', 'js/modules/habits.js', 'js/modules/notes.js', 'js/modules/chores.js', 'js/modules/school.js', 'js/modules/workouts.js', 'js/modules/search.js', 'js/data/recipes.js',
   'js/modules/settings.js', 'js/modules/more.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];

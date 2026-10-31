@@ -1,6 +1,6 @@
 // today.js — the home screen: everything that matters today, in one place.
 import * as store from '../store.js';
-import { h, pageHead, card, empty, btn, bar, ymd, relDay, money } from '../ui.js';
+import { h, pageHead, card, empty, btn, bar, iconBtn, ymd, relDay, money } from '../ui.js';
 import { eventsOn, eventRow } from './calendar.js';
 import { taskRow, quickAdd } from './tasks.js';
 import { habits, habitRow } from './habits.js';
@@ -20,6 +20,7 @@ export function render(root, { navigate }) {
   const greeting = hr < 5 ? 'Up late' : hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
   root.append(pageHead(greeting, {
     eyebrow: new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }),
+    actions: [iconBtn('search', () => navigate('search'), 'Search everything')],
   }));
 
   const grid = h('div', { class: 'grid' });

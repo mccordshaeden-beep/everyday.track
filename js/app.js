@@ -6,7 +6,7 @@ import { modules, byId } from './modules/index.js';
 import * as store from './store.js';
 import { initSync, onStatus, getStatus, updatePassword } from './sync.js';
 import { h, icon, paintDots, openForm, toast } from './ui.js';
-import { DEFAULT_TABS, isOn } from './modules/settings.js';
+import { DEFAULT_TABS, isOn, applyTheme } from './modules/settings.js';
 import { renderLogin } from './login.js';
 
 const main = document.getElementById('main');
@@ -131,5 +131,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('./sw.js').catch(err => console.warn('Service worker failed', err));
 }
 
+applyTheme();
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 render();
 initSync();

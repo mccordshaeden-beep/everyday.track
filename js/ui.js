@@ -45,6 +45,9 @@ const ICONS = {
   school: '<path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c3 2.5 9 2.5 12 0v-5M22 9v6"/>',
   clean: '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18.5 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8zM5 15l.6 1.4L7 17l-1.4.6L5 19l-.6-1.4L3 17l1.4-.6z"/>',
   repeat: '<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  workout: '<path d="M6.5 7v10M17.5 7v10M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/>',
+  pantry: '<rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M5 10h14M8.5 6.5v1M8.5 13v2"/>',
   sync: '<path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/>',
 };
 
@@ -339,4 +342,33 @@ export function barChart(values, { format = v => String(v), caption = '' } = {})
     svg.append(g);
   });
   return h('div', { class: 'chart' }, svg, readout);
+}
+
+/**
+ * A read-only bottom sheet (for viewing a recipe, etc.).
+ * actions: [{ label, onClick, cls }] — the sheet closes, then the action runs.
+ */
+export function openSheet({ title, body = [], actions = [] }) {
+  const dlg = h('dialog', { class: 'sheet' });
+  const close = () => dlg.close();
+  dlg.append(
+    h('div', { class: 'sheet-head' },
+      h('button', { type: 'button', class: 'btn ghost', onclick: close }, 'Close'),
+      h('h2', {}, title),
+      h('span', { style: { width: '64px' } })),
+    h('div', { class: 'sheet-body view' }, body),
+    actions.length ? h('div', { class: 'sheet-actions' }, actions.filter(Boolean).map(a =>
+      h('button', { type: 'button', class: `btn ${a.cls || ''}`, disabled: a.disabled, onclick: () => { close(); a.onClick?.(); } }, a.label))) : null);
+  dlg.addEventListener('click', e => { if (e.target === dlg) close(); });
+  dlg.addEventListener('close', () => { dlg.remove(); document.dispatchEvent(new Event('sheet-closed')); });
+  document.body.append(dlg);
+  dlg.showModal();
+  document.activeElement?.blur?.();
+  return dlg;
+}
+
+/** Monday of the week containing date d. */
+export function mondayOf(d = ymd()) {
+  const day = parseYmd(d).getDay();
+  return addDays(d, -((day + 6) % 7));
 }
