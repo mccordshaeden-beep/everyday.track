@@ -338,7 +338,7 @@ async function previewImport(file, catNames) {
       return h('div', { class: 'row imp-row' + (t.include ? '' : ' muted') }, cb,
         h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, t.desc), h('div', { class: 'row-sub' }, relDay(t.date)), sel),
         h('div', { class: t.amount > 0 ? 'amt in' : 'amt' }, (t.amount > 0 ? '+' : '') + money(t.amount)));
-    }), parsed.length > 60 ? h('p', { class: 'hint' }, `…and ${parsed.length - 60} more, categorized automatically.`) : null);
+    }), ...(parsed.length > 60 ? [h('p', { class: 'hint' }, `…and ${parsed.length - 60} more, categorized automatically.`)] : []));
     count();
     if (parsed.length && spentNeg === 0) summaryEl.textContent += ' ⚠ Nothing shows as money out. If spending looks like "+", tick "Flip signs".';
   }

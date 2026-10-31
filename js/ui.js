@@ -363,14 +363,15 @@ export function barChart(values, { format = v => String(v), caption = '' } = {})
 export function openSheet({ title, body = [], actions = [] }) {
   const dlg = h('dialog', { class: 'sheet' });
   const close = () => dlg.close();
-  dlg.append(
+  dlg.append(...[
     h('div', { class: 'sheet-head' },
       h('button', { type: 'button', class: 'btn ghost', onclick: close }, 'Close'),
       h('h2', {}, title),
       h('span', { style: { width: '64px' } })),
     h('div', { class: 'sheet-body view' }, body),
     actions.length ? h('div', { class: 'sheet-actions' }, actions.filter(Boolean).map(a =>
-      h('button', { type: 'button', class: `btn ${a.cls || ''}`, disabled: a.disabled, onclick: () => { close(); a.onClick?.(); } }, a.label))) : null);
+      h('button', { type: 'button', class: `btn ${a.cls || ''}`, disabled: a.disabled, onclick: () => { close(); a.onClick?.(); } }, a.label))) : null,
+  ].filter(Boolean));
   dlg.addEventListener('click', e => { if (e.target === dlg) close(); });
   dlg.addEventListener('close', () => { dlg.remove(); document.dispatchEvent(new Event('sheet-closed')); });
   document.body.append(dlg);

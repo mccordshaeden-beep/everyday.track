@@ -11,6 +11,7 @@ import { ymd, addDays, parseYmd, fmtTime, money } from './ui.js';
 import { eventsOn } from './modules/calendar.js';
 import { nextDue, nextRenewal } from './modules/money.js';
 import { myChores as chores, dueDate } from './modules/chores.js';
+import { habits, scheduled, met, isQuit, weekDone } from './modules/habits.js';
 
 const CFG_ID = 'settings:reminders';
 const DAYS_AHEAD = 10;
@@ -115,6 +116,17 @@ export function buildReminders(cfg = getConfig()) {
         const t = new Date(at(d, ev.start).getTime() - (Number(cfg.eventMinutes) || 30) * 60000);
         if (t > now) out.push({ kind: 'event', fire_at: t.toISOString(), title: ev.title, body: `${fmtTime(ev.start)}${ev.location ? ' · ' + ev.location : ''}`, url: '#/calendar' });
       }
+    }
+    // per-habit reminders (skipped once you've already done it today, or hit this week's goal)
+    for (const hb of habits()) {
+      if (!hb.remind || isQuit(hb) || !scheduled(hb, d)) continue;
+      if (i === 0 && met(hb, d)) continue;
+      if (hb.schedule === 'weekly') {
+        const ws = addDays(d, -((parseYmd(d).getDay() + 6) % 7));
+        if (weekDone(hb, ws, d) >= (Number(hb.perWeek) || 3)) continue;
+      }
+      const t = at(d, hb.remind);
+      if (t > now) out.push({ kind: 'habit', fire_at: t.toISOString(), title: `${hb.emoji || '⏰'} ${hb.name}`, body: Number(hb.goal) > 1 ? `Goal today: ${hb.goal}${hb.unit ? ' ' + hb.unit : ''}` : 'Time for this habit ✓', url: '#/habits' });
     }
     if (cfg.eveningOn) {
       const t = at(d, cfg.evening);

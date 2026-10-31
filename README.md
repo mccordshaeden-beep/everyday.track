@@ -185,6 +185,10 @@ Home freshness score, Mon–Sun week strip with real due dates, rooms, move/snoo
 
 **Roommates:** Cleaning → Create a household (or Join with a code). New chores are shared with everyone in the household; edit a chore to assign it to someone, take turns (it moves to the next roommate after whoever did it last), or make it private. Shared chores sync through `shared_items`; only household members can read or change them. Your other trackers stay private. "Just mine" filters to your chores, and reminders/Today only include chores that are yours.
 
+## Habits tab
+
+Tap-to-log rings grouped into Morning / Afternoon / Evening / Anytime routines (▶ Start walks you through one at a time). Each habit can be every day, certain days, or N times a week; "build" or "quit" (days clean, slips). Tap a habit's name for stats (current/best streak, 30-day success %) and a month heatmap; tap a day to change it or use a 🧊 streak freeze (2 a month). Optional reminder time per habit (uses the same push reminders). Daily mood & energy check-in with simple habit/mood insights. Milestone celebrations at 3, 7, 14, 21, 30, 50, 66, 100, 200, 365 and 9 badges.
+
 ## Ideas for later
 
 - Recurring tasks, a "skip one occurrence" option for repeating events
