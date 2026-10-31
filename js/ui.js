@@ -42,6 +42,9 @@ const ICONS = {
   right: '<path d="M9 6l6 6-6 6"/>',
   cart: '<path d="M3 4h2.2l2.1 11h10.9l2-8H6.2"/><circle cx="9" cy="19.5" r="1.4"/><circle cx="17" cy="19.5" r="1.4"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  school: '<path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c3 2.5 9 2.5 12 0v-5M22 9v6"/>',
+  clean: '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18.5 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8zM5 15l.6 1.4L7 17l-1.4.6L5 19l-.6-1.4L3 17l1.4-.6z"/>',
+  repeat: '<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/>',
   sync: '<path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/>',
 };
 
@@ -258,4 +261,82 @@ export function openForm({ title, fields, values = {}, submitLabel = 'Save', onS
   if (first && !values.id) inputs[first.name].focus();
   else document.activeElement?.blur?.();
   return dlg;
+}
+
+// ---- repeating schedules (subscriptions, bills, chores, repeating tasks) -------------
+export const CYCLES = [['weekly', 'Weekly'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Monthly'], ['quarterly', 'Every 3 months'], ['yearly', 'Yearly']];
+export const PER_MONTH = { daily: 365 / 12, weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12 };
+export const CYCLE_SHORT = { daily: 'day', weekly: 'wk', biweekly: '2 wks', monthly: 'mo', quarterly: '3 mo', yearly: 'yr' };
+
+/** The k-th repeat of a schedule that started on `anchor` (k = 0 is the anchor itself). */
+export function nthOccurrence(anchor, cycle, k) {
+  switch (cycle) {
+    case 'daily': return addDays(anchor, k);
+    case 'weekly': return addDays(anchor, 7 * k);
+    case 'biweekly': return addDays(anchor, 14 * k);
+    case 'quarterly': return addMonths(anchor, 3 * k);
+    case 'yearly': return addMonths(anchor, 12 * k);
+    default: return addMonths(anchor, k); // monthly
+  }
+}
+
+/** First repeat on or after `date`. */
+export function nextOnOrAfter(anchor, cycle, date) {
+  let k = 0, d = anchor;
+  while (d < date && k < 5000) { k++; d = nthOccurrence(anchor, cycle, k); }
+  return d;
+}
+
+/** How many repeats happened between anchor and `until` (inclusive). */
+export function countOccurrences(anchor, cycle, until) {
+  let k = 0;
+  while (k < 5000 && nthOccurrence(anchor, cycle, k) <= until) k++;
+  return k;
+}
+
+export function fmtMonthYear(s) {
+  return parseYmd(s).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
+
+/**
+ * Simple bar chart (one series): values [{ label, value, highlight }].
+ * Tapping a bar shows its value underneath; the highlighted bar is labeled.
+ */
+export function barChart(values, { format = v => String(v), caption = '' } = {}) {
+  const W = 320, H = 150, top = 22, bottom = 22, gap = 10;
+  const max = Math.max(1, ...values.map(v => v.value));
+  const bw = (W - gap * (values.length - 1)) / values.length;
+  const readout = h('p', { class: 'chart-readout', role: 'status' }, caption);
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'barchart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', values.map(v => `${v.label}: ${format(v.value)}`).join(', '));
+  const el = (tag, attrs, text) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  svg.append(el('line', { x1: 0, x2: W, y1: H - bottom, y2: H - bottom, class: 'axis' }));
+  values.forEach((v, i) => {
+    const x = i * (bw + gap);
+    const bh = v.value > 0 ? Math.max(3, (v.value / max) * (H - top - bottom)) : 0;
+    const y = H - bottom - bh;
+    const g = el('g', { class: 'bar-g' + (v.highlight ? ' hl' : ''), tabindex: '0' });
+    g.append(el('title', {}, `${v.label}: ${format(v.value)}`));
+    // rounded top, square bottom
+    const r = Math.min(4, bw / 2, bh);
+    g.append(el('path', { d: `M${x},${H - bottom} V${y + r} Q${x},${y} ${x + r},${y} H${x + bw - r} Q${x + bw},${y} ${x + bw},${y + r} V${H - bottom} Z`, class: 'bar' }));
+    g.append(el('rect', { x, y: 0, width: bw, height: H, fill: 'transparent' })); // big tap target
+    g.append(el('text', { x: x + bw / 2, y: H - 6, 'text-anchor': 'middle', class: 'lbl' }, v.label));
+    if (v.highlight && v.value > 0) g.append(el('text', { x: x + bw / 2, y: y - 6, 'text-anchor': 'middle', class: 'val' }, format(v.value)));
+    const show = () => { readout.textContent = `${v.label}: ${format(v.value)}`; };
+    g.addEventListener('click', show);
+    g.addEventListener('mouseenter', show);
+    g.addEventListener('focus', show);
+    svg.append(g);
+  });
+  return h('div', { class: 'chart' }, svg, readout);
 }

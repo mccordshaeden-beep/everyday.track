@@ -1,6 +1,10 @@
 // tasks.js — to-do list with due dates, lists (School, Work…) and priority.
 import * as store from '../store.js';
-import { h, pageHead, card, empty, seg, addBtn, btn, icon, openForm, ymd, addDays, relDay } from '../ui.js';
+import { editAssignment } from './school.js';
+import { h, pageHead, card, empty, seg, addBtn, btn, icon, openForm, ymd, addDays, relDay, nextOnOrAfter } from '../ui.js';
+
+export const REPEATS = [['', 'Does not repeat'], ['daily', 'Every day'], ['weekly', 'Every week'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Every month'], ['yearly', 'Every year']];
+const REPEAT_LABEL = Object.fromEntries(REPEATS);
 
 export const id = 'tasks';
 export const title = 'Tasks';
@@ -20,6 +24,7 @@ export function editTask(task, defaults = {}) {
       { name: 'due', label: 'Due date', type: 'date' },
       { name: 'list', label: 'List', suggestions: ['School', 'Work', 'Home', ...listNames()], placeholder: 'School, Work, Home…' },
       { name: 'priority', label: 'Priority', type: 'select', options: [['', 'Normal'], ['high', 'High'], ['low', 'Low']] },
+      { name: 'repeat', label: 'Repeat', type: 'select', options: REPEATS, hint: 'When you check it off, the next one is added automatically' },
       { name: 'notes', label: 'Notes', type: 'textarea', rows: 3 },
     ],
     onSubmit: v => { store.save(COL, task ? v : { ...v, done: false }, task?.id); },
@@ -29,6 +34,15 @@ export function editTask(task, defaults = {}) {
 
 export function toggleTask(t) {
   store.save(COL, { done: !t.done, doneAt: !t.done ? ymd() : '' }, t.id);
+  // Repeating task: checking it off creates the next one (once).
+  if (!t.done && t.repeat && !t.spawned) {
+    const today = ymd();
+    const base = t.due || today;
+    const from = addDays(base, 1) > today ? addDays(base, 1) : today;
+    const { id: _id, done, doneAt, created, spawned, ...rest } = t;
+    store.save(COL, { ...rest, due: nextOnOrAfter(base, t.repeat, from), done: false });
+    store.save(COL, { spawned: true }, t.id);
+  }
 }
 
 export function taskRow(t) {
@@ -38,11 +52,12 @@ export function taskRow(t) {
       type: 'button', class: 'check' + (t.done ? ' on' : ''),
       'aria-label': t.done ? 'Mark not done' : 'Mark done', onclick: () => toggleTask(t),
     }),
-    h('div', { class: 'row-main', onclick: () => editTask(t) },
+    h('div', { class: 'row-main', onclick: () => (t.classId ? editAssignment(t) : editTask(t)) },
       h('div', { class: 'row-title' }, t.priority === 'high' ? h('span', { class: 'pri' }, '!') : null, t.title),
-      (t.due || t.list) ? h('div', { class: 'row-meta' },
+      (t.due || t.list || t.repeat) ? h('div', { class: 'row-meta' },
         t.due ? h('span', { class: overdue ? 'tag red' : 'tag' }, relDay(t.due)) : null,
-        t.list ? h('span', { class: 'tag' }, t.list) : null) : null));
+        t.list ? h('span', { class: 'tag' }, t.list) : null,
+        t.repeat ? h('span', { class: 'tag' }, '↻ ' + (REPEAT_LABEL[t.repeat] || '').replace('Every ', '')) : null) : null));
 }
 
 /** "Read ch. 4 tomorrow" → { title: 'Read ch. 4', due: <tomorrow> } */
