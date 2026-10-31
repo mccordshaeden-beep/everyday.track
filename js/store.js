@@ -44,18 +44,25 @@ export function list(col) {
   return out;
 }
 
+/** The household a record is shared with ('' if private). */
+export const householdOf = id => items[id]?.hh || '';
+
 /** One record by id, or null. */
 export function get(id) {
   const it = items[id];
   return it && !it.deleted ? { id, ...it.data } : null;
 }
 
-/** Create or update. Fields you pass are merged into the existing record. Returns the id. */
-export function save(col, fields, id) {
+/**
+ * Create or update. Fields you pass are merged into the existing record. Returns the id.
+ * opts.hh = a household id: the record is shared with that household instead of private.
+ */
+export function save(col, fields, id, opts = {}) {
   id = id || uid();
   const { id: _ignore, ...clean } = fields;
   const prev = items[id] && !items[id].deleted ? items[id].data : { created: now() };
-  items[id] = { id, col, data: { ...prev, ...clean }, updatedAt: now(), deleted: false };
+  const hh = opts.hh !== undefined ? opts.hh : items[id]?.hh;
+  items[id] = { id, col, data: { ...prev, ...clean }, updatedAt: now(), deleted: false, ...(hh ? { hh } : {}) };
   meta.dirty[id] = true;
   persist();
   emit('local');
@@ -93,12 +100,19 @@ export function applyRemote(rows) {
     const updatedAt = new Date(r.updated_at).toISOString();
     const local = items[r.id];
     if (local && local.updatedAt >= updatedAt) continue;
-    items[r.id] = { id: r.id, col: r.collection, data: r.data || {}, updatedAt, deleted: !!r.deleted };
+    items[r.id] = { id: r.id, col: r.collection, data: r.data || {}, updatedAt, deleted: !!r.deleted, ...(r.household_id ? { hh: r.household_id } : {}) };
     delete meta.dirty[r.id];
     changed = true;
   }
   if (changed) { persist(); emit('remote'); }
   return changed;
+}
+
+/** After leaving a household: forget its shared records on this device. */
+export function dropHousehold(hh) {
+  for (const id of Object.keys(items)) if (items[id].hh === hh) { delete items[id]; delete meta.dirty[id]; }
+  persist();
+  emit('remote');
 }
 
 export function getMeta(key) { return meta[key]; }

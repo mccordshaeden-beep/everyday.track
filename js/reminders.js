@@ -10,7 +10,7 @@ import { getClient, getStatus, onStatus, callFunction } from './sync.js';
 import { ymd, addDays, parseYmd, fmtTime, money } from './ui.js';
 import { eventsOn } from './modules/calendar.js';
 import { nextDue, nextRenewal } from './modules/money.js';
-import { chores, dueDate } from './modules/chores.js';
+import { myChores as chores, dueDate } from './modules/chores.js';
 
 const CFG_ID = 'settings:reminders';
 const DAYS_AHEAD = 10;

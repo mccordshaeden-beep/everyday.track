@@ -1,0 +1,9 @@
+-- households.sql — already applied. Roommates sharing a cleaning list.
+-- Tables: households (name, invite_code, created_by), household_members, shared_items (same shape as items).
+-- RLS: only members can see a household, its members, and its shared_items (private.is_household_member()).
+-- Only the creator can rename/delete a household or make a new invite code. Anyone can leave.
+-- RPCs (security definer, check auth.uid() inside): create_household(name, display_name),
+--   join_household(code, display_name), new_household_code(household_id).
+-- Invite codes: 10 characters from a 31-character alphabet (~50 bits). Households are capped at 12 members.
+-- shared_items uses the same last-write-wins trigger as items (public.items_lww).
+-- Full SQL is in the Supabase dashboard → Database → Migrations ("households", "hide_membership_helper").

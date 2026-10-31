@@ -526,3 +526,29 @@ details.bank-hints .field { margin-top: 10px; }
 @keyframes confetti-fall { to { transform: translateY(110vh) rotate(540deg); opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .confetti { display: none; } .ring-fg { transition: none; } }
 .quick-btn { margin-top: 10px; min-height: 34px; padding: 4px 12px; font-size: 14px; background: var(--card); }
+
+/* ---------- cleaning: checklists, roommates, badges, deep cleans ---------- */
+.checklist { display: flex; flex-direction: column; gap: 6px; }
+.step { display: flex; align-items: center; gap: 10px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--field); font-size: 15px; }
+.step-box { width: 22px; height: 22px; border-radius: 7px; border: 2px solid color-mix(in srgb, var(--muted) 60%, transparent); flex-shrink: 0; position: relative; }
+.step.on { color: var(--muted); text-decoration: line-through; }
+.step.on .step-box { background: var(--accent); border-color: var(--accent); }
+.step.on .step-box::after { content: ""; position: absolute; left: 6px; top: 2px; width: 5px; height: 10px; border: solid var(--accent-ink); border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); }
+.tag.who { background: var(--rm-purple, #e8e0f4); color: var(--rm-purple-i, #6b4fa8); }
+.tag.who.mine { background: var(--accent-soft); color: var(--accent); }
+.tag.deep { background: var(--rm-teal, #d6efec); color: var(--rm-teal-i, #1d7d78); }
+.hh-card .member { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 99px; background: var(--field); font-size: 14px; font-weight: 500; }
+.avatar { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-size: 13px; font-weight: 700; }
+.invite { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 14px; border-radius: 12px; background: var(--field); border: 1px dashed var(--line); }
+.invite code { font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.badges { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+@media (max-width: 380px) { .badges { grid-template-columns: repeat(4, 1fr); } }
+.badge { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px 8px; border-radius: 14px; border: 1px solid var(--line); background: var(--field); }
+.badge-emoji { font-size: 24px; filter: grayscale(1); opacity: .45; }
+.badge-name { font-size: 11px; font-weight: 600; color: var(--muted); text-align: center; line-height: 1.2; }
+.badge.got { background: linear-gradient(160deg, var(--accent-soft), var(--card)); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.badge.got .badge-emoji { filter: none; opacity: 1; }
+.badge.got .badge-name { color: var(--ink); }
+.deep-card { background: linear-gradient(160deg, var(--rm-teal, #d6efec), var(--card) 65%); }
+details.more-ideas { margin-top: 10px; }
+details.more-ideas summary { cursor: pointer; font-weight: 600; color: var(--accent); font-size: 14px; }

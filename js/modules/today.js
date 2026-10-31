@@ -7,7 +7,7 @@ import { habits, habitRow } from './habits.js';
 import { mealsSummary, editLog, groceryCount, setTab as setFoodTab } from './food.js';
 import { isOn } from './settings.js';
 import { summaryBlock, editTxn, upcomingSubs, billsDueSoon, billRow, setTab as setMoneyTab } from './money.js';
-import { choreRow, chores, dueDate, weekProgress } from './chores.js';
+import { choreRow, myChores as chores, dueDate, weekProgress } from './chores.js';
 import { upcomingAssignments, editAssignment } from './school.js';
 
 export const id = 'today';

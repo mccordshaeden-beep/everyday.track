@@ -98,8 +98,24 @@ export async function syncNow() {
   set({ state: 'syncing', error: null });
 
   try {
-    // 1. PUSH
-    const dirty = store.dirtyItems();
+    // 0. Which households am I in? (for shared chores)
+    await refreshHouseholds();
+    const myHH = new Set((store.getMeta('households') || []).map(x => x.id));
+
+    // 1. PUSH (shared records go to shared_items, everything else to items)
+    const allDirty = store.dirtyItems();
+    const shared = allDirty.filter(it => it.hh);
+    const dirty = allDirty.filter(it => !it.hh);
+    for (let i = 0; i < shared.length; i += 500) {
+      const chunk = shared.slice(i, i + 500).filter(it => myHH.has(it.hh));
+      if (chunk.length) {
+        const { error } = await client.from('shared_items').upsert(chunk.map(it => ({
+          household_id: it.hh, id: it.id, collection: it.col, data: it.data, updated_at: it.updatedAt, deleted: !!it.deleted, updated_by: status.user.id,
+        })), { onConflict: 'household_id,id' });
+        if (error) throw error;
+      }
+      store.markClean(shared.slice(i, i + 500)); // (records for a household you left are just dropped)
+    }
     for (let i = 0; i < dirty.length; i += 500) {
       const chunk = dirty.slice(i, i + 500);
       const rows = chunk.map(it => ({
@@ -134,6 +150,25 @@ export async function syncNow() {
       if (data.length < 1000) break;
     }
 
+    // 3. PULL shared household records
+    if (myHH.size) {
+      const lastS = store.getMeta('lastPullShared');
+      let cur = lastS ? new Date(new Date(lastS).getTime() - 10_000).toISOString() : null;
+      for (;;) {
+        let q = client.from('shared_items')
+          .select('household_id,id,collection,data,updated_at,deleted,synced_at')
+          .order('synced_at', { ascending: true }).limit(1000);
+        if (cur) q = q.gt('synced_at', cur);
+        const { data, error } = await q;
+        if (error) throw error;
+        if (!data.length) break;
+        store.applyRemote(data);
+        cur = data[data.length - 1].synced_at;
+        store.setMeta('lastPullShared', cur);
+        if (data.length < 1000) break;
+      }
+    }
+
     const at = new Date().toISOString();
     store.setMeta('lastSyncAt', at);
     set({ state: 'idle', lastSync: at });
@@ -144,6 +179,49 @@ export async function syncNow() {
     busy = false;
     if (again) { again = false; schedule(500); }
   }
+}
+
+// ---- households (shared cleaning with roommates) -----------------------------------------
+async function refreshHouseholds() {
+  const { data: hs, error } = await client.from('households').select('id,name,invite_code,created_by');
+  if (error) { console.warn(error); return; }
+  const { data: ms } = await client.from('household_members').select('household_id,user_id,display_name,joined_at').order('joined_at');
+  const list = (hs || []).map(h => ({ ...h, members: (ms || []).filter(m => m.household_id === h.id).map(m => ({ id: m.user_id, name: m.display_name })) }));
+  const before = JSON.stringify(store.getMeta('households') || []);
+  // forget shared data for households I'm no longer in
+  for (const old of JSON.parse(before)) if (!list.some(h => h.id === old.id)) store.dropHousehold(old.id);
+  if (JSON.stringify(list) !== before) {
+    store.setMeta('households', list);
+    if (list.length > JSON.parse(before).length) store.setMeta('lastPullShared', null); // new household: pull everything
+    householdListeners.forEach(fn => fn(list));
+  }
+}
+const householdListeners = new Set();
+export const onHouseholds = fn => { householdListeners.add(fn); return () => householdListeners.delete(fn); };
+export const households = () => store.getMeta('households') || [];
+
+async function rpc(name, args) {
+  if (!client || !status.user) throw new Error('Sign in first.');
+  const { data, error } = await client.rpc(name, args);
+  if (error) throw new Error(error.message);
+  return data;
+}
+export async function createHousehold(name, displayName) {
+  const r = await rpc('create_household', { p_name: name, p_display: displayName });
+  await refreshHouseholds(); return r;
+}
+export async function joinHousehold(code, displayName) {
+  const r = await rpc('join_household', { p_code: code, p_display: displayName });
+  await refreshHouseholds(); syncNow(); return r;
+}
+export async function leaveHousehold(hh) {
+  const { error } = await client.from('household_members').delete().eq('household_id', hh).eq('user_id', status.user.id);
+  if (error) throw new Error(error.message);
+  await refreshHouseholds();
+}
+export async function newInviteCode(hh) {
+  const code = await rpc('new_household_code', { p_household: hh });
+  await refreshHouseholds(); return code;
 }
 
 export async function signIn(email, password) {

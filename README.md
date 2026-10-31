@@ -179,6 +179,12 @@ Importing: download a CSV from your bank's website (step-by-step instructions ar
 
 Settings → **Meta Muse** → Create a key. Muse gets read-only access to the Calendar (events and due items) through the `calendar-mcp` Edge Function. Only the owner's account can create keys (enforced by the database policy and the function).
 
+## Cleaning tab
+
+Home freshness score, Mon–Sun week strip with real due dates, rooms, move/snooze, "every week on Saturdays" scheduling, ⚡ Quick clean, checklists inside chores, seasonal deep-clean ideas, and badges.
+
+**Roommates:** Cleaning → Create a household (or Join with a code). New chores are shared with everyone in the household; edit a chore to assign it to someone, take turns (it moves to the next roommate after whoever did it last), or make it private. Shared chores sync through `shared_items`; only household members can read or change them. Your other trackers stay private. "Just mine" filters to your chores, and reminders/Today only include chores that are yours.
+
 ## Ideas for later
 
 - Recurring tasks, a "skip one occurrence" option for repeating events
