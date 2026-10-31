@@ -10,6 +10,30 @@ export const glyph = 'settings';
 
 export const DEFAULT_TABS = ['today', 'tasks', 'food', 'money'];
 const UI_ID = 'settings:ui';
+const ALWAYS_ON = ['today', 'settings', 'more'];
+
+/** Is this screen turned on for the signed-in person? (Settings → Your trackers) */
+export function isOn(id) {
+  if (ALWAYS_ON.includes(id)) return true;
+  const enabled = store.get(UI_ID)?.enabled;
+  return !Array.isArray(enabled) || enabled.includes(id);
+}
+
+function trackersCard() {
+  const choices = modules.filter(m => !ALWAYS_ON.includes(m.id));
+  return card('Your trackers', {},
+    h('p', { class: 'muted' }, 'Turn on only what you use. Hidden trackers keep their data, so you can turn them back on any time.'),
+    h('div', { class: 'chip-row' }, choices.map(m => {
+      const on = isOn(m.id);
+      return h('button', {
+        type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on),
+        onclick: () => {
+          const enabled = choices.map(c => c.id).filter(id => (id === m.id ? !on : isOn(id)));
+          store.save('settings', { enabled }, UI_ID);
+        },
+      }, m.title);
+    })));
+}
 
 function syncCard(ctx) {
   const s = getStatus();
@@ -45,12 +69,14 @@ function syncCard(ctx) {
     s.error ? h('p', { class: 'bad' }, s.error) : null,
     h('div', { class: 'btn-row' },
       btn('Sync now', () => syncNow(), 'primary'),
-      btn('Sign out', async () => { await signOut(); ctx.rerender(); }, 'ghost')));
+      btn('Sign out', async () => {
+        if (confirm('Sign out? Your data stays safe in your account and is removed from this device until you sign in again.')) await signOut();
+      }, 'ghost')));
 }
 
 function tabsCard(ctx) {
   const current = store.get(UI_ID)?.tabs?.length ? store.get(UI_ID).tabs : DEFAULT_TABS;
-  const choices = modules.filter(m => !['more', 'settings'].includes(m.id));
+  const choices = modules.filter(m => !['more', 'settings'].includes(m.id) && isOn(m.id));
   return card('Phone tab bar', {},
     h('p', { class: 'muted' }, 'Pick up to 4 screens for the bottom bar. Everything else is under "More".'),
     h('div', { class: 'chip-row' }, choices.map(m => {
@@ -103,7 +129,7 @@ function installCard() {
 export function render(root, ctx) {
   root.append(pageHead('Settings'));
   root.append(h('div', { class: 'grid' },
-    syncCard(ctx), tabsCard(ctx), installCard(), backupCard(),
+    syncCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
     card('This device', {},
       h('p', { class: 'muted' }, 'Erase removes the data stored on this device only. If you are signed in, it downloads again on the next sync.'),
       btn('Erase data on this device', () => {

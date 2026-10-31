@@ -57,9 +57,18 @@ Sync uses **Supabase**, a hosted Postgres database with built-in logins.
    ```
    Upload the changed `config.js` to GitHub (open it in the repo → pencil icon → paste → Commit).
 5. **Authentication → URL Configuration** → set **Site URL** to your app's address (`https://YOUR-USERNAME.github.io/everyday/`) so the "confirm your email" link opens the right place.
-6. Open the app → **Settings** → enter an email + password → **Create account** → confirm the email → **Sign in**.
+6. Open the app. Once sync is set up, it starts on a **login screen**. Tap **Create account**, enter an email + password, tap the link in the confirmation email, then sign in.
 7. Sign in with the same account on every other device. Done: changes show up everywhere within a few seconds of opening the app.
-8. **Lock the door:** Supabase → **Authentication → Sign In / Providers** → turn **off** "Allow new users to sign up". Now nobody else can make an account on your database.
+
+## 4b. Letting other people use it
+
+Anyone with the link can create their own account and gets their own empty, private tracker. The database rules (Row Level Security) only let each account read and write its own rows. Just send them the link.
+
+- Each person picks which trackers they want in **Settings → Your trackers**, and that choice follows their account.
+- **Signing out wipes that device's copy** (it's safe in the account), so a shared iPad never shows the last person's stuff.
+- **Be upfront with friends:** as the owner of the Supabase project, you *can* see everyone's data in the Supabase dashboard (Table Editor). The app hides it from other users, not from the database admin.
+- Want it to be just you again? Supabase → **Authentication → Sign In / Providers** → turn off "Allow new users to sign up".
+- The free Supabase plan's built-in email sender only sends a few emails per hour, which is fine for a handful of friends. For more, add your own email provider under **Authentication → Emails → SMTP**.
 
 The green dot next to each page title means synced; amber means not signed in or offline; red means a problem (details in Settings).
 
@@ -82,7 +91,8 @@ everyday/
 ├── sw.js                   service worker → offline + instant loading
 ├── css/app.css             all styling (phone layout, then ≥820px sidebar layout)
 ├── js/
-│   ├── app.js              starts everything, navigation, redraws on changes
+│   ├── app.js              starts everything, login gate, navigation, redraws
+│   ├── login.js            sign in / create account / forgot password screen
 │   ├── store.js            local database (localStorage)
 │   ├── sync.js             Supabase sign-in + push/pull
 │   ├── ui.js               helpers: h(), icons, cards, forms, dates, money

@@ -14,7 +14,7 @@ import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
 const status = {
   configured: Boolean(SUPABASE_URL && SUPABASE_KEY),
   user: null,
-  state: 'off', // off | signed-out | syncing | idle | error | offline
+  state: SUPABASE_URL && SUPABASE_KEY ? 'loading' : 'off', // off | loading | signed-out | syncing | idle | error | offline
   error: null,
   lastSync: store.getMeta('lastSyncAt') || null,
 };
@@ -33,20 +33,36 @@ export async function initSync() {
   try {
     const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
     client = createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
   } catch (e) {
     set({ state: 'offline', error: 'Could not load the sync library. Working offline.' });
     return;
   }
 
-  const { data } = await client.auth.getSession();
-  set({ user: data.session?.user || null, state: data.session ? 'idle' : 'signed-out' });
+  let session = null;
+  try {
+    // Don't hang forever on a bad connection: give up after 6 seconds and work offline.
+    const res = await Promise.race([
+      client.auth.getSession(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
+    ]);
+    session = res.data.session;
+  } catch {
+    set({ state: 'offline' });
+  }
+  if (/access_token|error_description|[?&]code=/.test(location.href)) history.replaceState(null, '', location.pathname + '#/today');
+  if (session) claimDevice(session.user);
+  if (status.state === 'loading' || session) set({ user: session?.user || null, state: session ? 'idle' : 'signed-out' });
 
-  client.auth.onAuthStateChange((_event, session) => {
+  client.auth.onAuthStateChange((event, session) => {
     const before = status.user?.id;
-    set({ user: session?.user || null, state: session ? status.state === 'signed-out' ? 'idle' : status.state : 'signed-out' });
-    if (session && session.user.id !== before) syncNow();
+    // Opened from a "reset password" email: ask for the new password.
+    if (event === 'PASSWORD_RECOVERY') setTimeout(() => document.dispatchEvent(new Event('password-recovery')), 0);
+    if (session) claimDevice(session.user);
+    set({ user: session?.user || null, state: session ? (['signed-out', 'loading'].includes(status.state) ? 'idle' : status.state) : 'signed-out' });
+    // Supabase recommends not calling it again from inside this callback, so wait a tick.
+    if (session && session.user.id !== before) setTimeout(syncNow, 0);
   });
 
   store.subscribe(source => { if (source === 'local') schedule(1500); });
@@ -58,6 +74,18 @@ export async function initSync() {
   setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60_000);
 
   syncNow();
+}
+
+/**
+ * Each device remembers which account its data belongs to. If a *different*
+ * person signs in on this device, wipe the old copy first so their data never
+ * mixes with (or gets uploaded into) someone else's account.
+ */
+function claimDevice(user) {
+  const owner = store.getMeta('ownerId');
+  if (owner === user.id) return;
+  if (owner) store.eraseLocal();
+  store.setMeta('ownerId', user.id);
 }
 
 function schedule(ms) { clearTimeout(timer); timer = setTimeout(syncNow, ms); }
@@ -129,6 +157,19 @@ export async function signUp(email, password) {
   return data; // if email confirmation is on, data.session is null until they confirm
 }
 
+/** Upload anything unsaved, sign out, then clear this device for the next person. */
 export async function signOut() {
-  await client.auth.signOut();
+  try { await syncNow(); } catch {}
+  await client.auth.signOut({ scope: 'local' });
+  store.eraseLocal();
+}
+
+export async function updatePassword(password) {
+  const { error } = await client.auth.updateUser({ password });
+  if (error) throw error;
+}
+
+export async function resetPassword(email) {
+  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  if (error) throw error;
 }

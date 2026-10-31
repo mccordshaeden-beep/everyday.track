@@ -322,3 +322,24 @@ dialog::backdrop { background: rgba(10, 12, 10, .4); }
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 @media (min-width: 820px) { #toast { bottom: 28px; } }
+
+/* ---------- login & loading ---------- */
+body[data-gate="login"] .tabbar, body[data-gate="login"] .sidebar,
+body[data-gate="loading"] .tabbar, body[data-gate="loading"] .sidebar { display: none; }
+body[data-gate="login"] main, body[data-gate="loading"] main { padding-bottom: 32px; }
+.splash { min-height: 70dvh; display: grid; place-items: center; }
+.splash img { border-radius: 18px; animation: pulse 1s infinite alternate; }
+.login { min-height: 80dvh; display: grid; place-items: center; padding: 12px 0; }
+.login-card {
+  width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 14px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 26px 22px;
+}
+.login-brand { display: flex; align-items: center; gap: 12px; }
+.login-brand img { border-radius: 14px; }
+.login-brand h1 { font-size: 28px; letter-spacing: -0.02em; }
+.login .seg button { flex: 1; }
+.login .stack-form { margin-top: 0; }
+.login-msg { font-size: 14px; color: var(--muted); min-height: 1em; }
+.login-msg.bad { color: var(--red); }
+.btn.big { min-height: 48px; font-size: 16px; }
+.hint.center { text-align: center; }
