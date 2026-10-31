@@ -1,7 +1,8 @@
 // settings.js — sign in for sync, choose the phone tab bar, back up your data.
 import * as store from '../store.js';
-import { getStatus, signIn, signUp, signOut, syncNow } from '../sync.js';
-import { h, pageHead, card, btn, toast, paintDots } from '../ui.js';
+import { getStatus, signIn, signUp, signOut, syncNow, getClient } from '../sync.js';
+import { SUPABASE_URL } from '../config.js';
+import { h, pageHead, card, btn, toast, paintDots, openSheet } from '../ui.js';
 import { modules } from './index.js';
 import * as rem from '../reminders.js';
 
@@ -164,6 +165,86 @@ function remindersCard(ctx) {
       h('div', { class: 'btn-row' }, btn('Pause all reminders', async () => { rem.saveConfig({ enabled: false }); await rem.reschedule(); ctx.rerender(); }, 'ghost sm'))) : null);
 }
 
+
+// ---- Meta Muse calendar connector (owner's account only) ------------------------------------
+// The database only accepts keys for this account (see supabase/muse_connector.sql).
+const MUSE_OWNER = '0e7ff033-c3cc-4c6f-ab5a-34fd5eb16153';
+const MCP_URL = `${SUPABASE_URL}/functions/v1/calendar-mcp`;
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function newKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return 'evd_' + btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function copyRow(label, value) {
+  return h('div', { class: 'copy-row' },
+    h('span', { class: 'field-label' }, label),
+    h('div', { class: 'copy-box' }, h('code', {}, value),
+      btn('Copy', async e => {
+        try { await navigator.clipboard.writeText(value); toast('Copied'); }
+        catch { toast('Couldn\'t copy. Press and hold to select it instead.'); }
+      }, 'ghost sm')));
+}
+
+function museCard(ctx) {
+  const s = getStatus();
+  if (!s.user || s.user.id !== MUSE_OWNER) return null;
+  const box = h('div', {}, h('p', { class: 'muted' }, 'Loading…'));
+  const steps = h('ol', { class: 'steps-help' },
+    h('li', {}, 'In Meta AI (Muse), start a chat and say: "Add a custom connector to this MCP server: [paste the Connector link]. It uses a Bearer token."'),
+    h('li', {}, 'When Muse asks for the key or token, paste your Everyday key. Approve the connection.'),
+    h('li', {}, 'Test it: "What\'s on my Everyday calendar this week?"'),
+    h('li', {}, 'Set up reminders, for example: "Every morning at 7, check my Everyday calendar and remind me 2 days before and 2 hours before anything that\'s due."'));
+
+  async function load() {
+    const { data, error } = await getClient().from('calendar_tokens').select('id,label,created_at,last_used').order('created_at');
+    if (error) { box.replaceChildren(h('p', { class: 'bad' }, error.message)); return; }
+    box.replaceChildren(
+      data.length ? h('div', {}, data.map(t => h('div', { class: 'row' },
+        h('div', { class: 'row-main' },
+          h('div', { class: 'row-title' }, t.label),
+          h('div', { class: 'row-sub' }, `Created ${new Date(t.created_at).toLocaleDateString()} · ${t.last_used ? 'last used ' + new Date(t.last_used).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'not used yet'}`)),
+        btn('Revoke', async () => {
+          if (!confirm('Revoke this key? Muse will lose access to your calendar until you make a new key.')) return;
+          await getClient().from('calendar_tokens').delete().eq('id', t.id);
+          toast('Key revoked'); load();
+        }, 'danger sm')))) : h('p', { class: 'muted' }, 'No key yet.'),
+      h('div', { class: 'btn-row' }, btn(data.length ? 'Make a new key' : 'Create a key for Muse', create, 'primary')),
+      copyRow('Connector link (MCP server URL)', MCP_URL),
+      h('p', { class: 'field-label', style: { marginTop: '10px' } }, 'How to connect'),
+      steps,
+      h('p', { class: 'hint' }, 'Muse can only read your Calendar: events and things that are due. It can\'t see or change anything else, and you can revoke the key any time. Muse\'s menus may look a little different from these steps.'));
+  }
+
+  async function create() {
+    const key = newKey();
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Denver';
+    const { error } = await getClient().from('calendar_tokens').insert({ user_id: s.user.id, token_hash: await sha256Hex(key), label: 'Meta Muse', tz });
+    if (error) { toast(error.message); return; }
+    openSheet({
+      title: 'Your Muse key',
+      body: [
+        h('div', { class: 'allergy-warn' }, h('b', {}, 'Copy this now. '), 'For safety it\'s only shown once. Treat it like a password: anyone with it can read your calendar.'),
+        copyRow('Everyday key', key),
+        copyRow('Connector link', MCP_URL),
+        h('p', { class: 'hint' }, 'If Muse only asks for a link (no separate key box), use this one instead. Keep it private:'),
+        copyRow('Link with key built in', `${MCP_URL}?key=${key}`),
+        steps.cloneNode(true),
+      ],
+      actions: [{ label: 'Done', cls: 'primary', onClick: load }],
+    });
+    load();
+  }
+
+  queueMicrotask(load);
+  return card('Meta Muse (calendar only)', {},
+    h('p', { class: 'muted' }, 'Let Meta\'s Muse read your Everyday calendar so it can remind you before things are due. Only your account sees this.'),
+    box);
+}
+
 function backupCard() {
   const file = h('input', {
     type: 'file', accept: 'application/json,.json', hidden: true,
@@ -200,7 +281,7 @@ function installCard() {
 export function render(root, ctx) {
   root.append(pageHead('Settings'));
   root.append(h('div', { class: 'grid' },
-    syncCard(ctx), remindersCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
+    syncCard(ctx), remindersCard(ctx), museCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
     card('This device', {},
       h('p', { class: 'muted' }, 'Erase removes the data stored on this device only. If you are signed in, it downloads again on the next sync.'),
       btn('Erase data on this device', () => {

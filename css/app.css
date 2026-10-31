@@ -440,3 +440,21 @@ ul.ex-list li { display: flex; justify-content: space-between; gap: 12px; font-s
 .find-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .find-links a.btn { text-decoration: none; }
 .sheet-note { margin: 0 0 2px; }
+.copy-row { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.copy-box { display: flex; align-items: center; gap: 6px; background: var(--field); border: 1px solid var(--line); border-radius: 10px; padding: 6px 6px 6px 10px; }
+.copy-box code { flex: 1; min-width: 0; font-size: 12.5px; overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+/* ---------- bank vault ---------- */
+.vault-card { text-align: left; }
+.vault-icon { font-size: 34px; margin: 2px 0 8px; }
+.vault-pw { display: block; font-size: 19px; letter-spacing: .04em; padding: 14px; text-align: center; border-radius: 12px; background: var(--field); border: 1px solid var(--line); user-select: all; -webkit-user-select: all; overflow-wrap: anywhere; }
+ol.big-steps { margin: 4px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
+ol.big-steps li b { display: block; }
+ol.big-steps li span { color: var(--muted); font-size: 14px; }
+details.bank-hints { background: var(--field); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+details.bank-hints summary { font-weight: 600; cursor: pointer; }
+details.bank-hints ul { margin: 8px 0 0; padding-left: 18px; font-size: 14px; display: flex; flex-direction: column; gap: 6px; }
+details.bank-hints .field { margin-top: 10px; }
+.imp-row input[type=checkbox] { margin-right: 2px; }
+.imp-row .inline-sel { margin-top: 6px; font-size: 14px; min-height: 34px; }
+.day-sep { margin: 12px 0 0; }
+.section-head > span:last-child { display: flex; gap: 6px; align-items: center; }

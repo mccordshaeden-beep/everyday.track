@@ -6,3 +6,4 @@ Both are deployed to the Supabase project (Dashboard → Edge Functions), with "
 - **canvas-feed**: signed-in users only. Downloads a Canvas calendar (.ics) link and returns its text.
 
 The source is visible in the Supabase dashboard for each function. To change one, edit it there or ask Claude to redeploy it.
+- **calendar-mcp**: read-only MCP server for Meta Muse. Only the owner's account (app_secrets.calendar_owner) can use it, with a key made in Settings → Meta Muse. Tools: get_upcoming, get_calendar (events + due tasks/assignments).

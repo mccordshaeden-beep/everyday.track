@@ -5,6 +5,7 @@ import {
   ymd, addDays, addMonths, daysBetween, relDay, parseYmd, fmtMonthYear,
   CYCLES, PER_MONTH, CYCLE_SHORT, nthOccurrence, nextOnOrAfter, countOccurrences,
 } from '../ui.js';
+import { renderBank, bankSpending, vaultExists, isUnlocked } from './bank.js';
 
 export const id = 'money';
 export const title = 'Money';
@@ -59,7 +60,14 @@ export function monthStats(ym) {
   for (const t of txns) if (t.type !== 'income') byCat[t.category || 'Other'] = (byCat[t.category || 'Other'] || 0) + (Number(t.amount) || 0);
   const budget = getBudget();
   const limit = budget.categories.reduce((s, c) => s + (Number(c.limit) || 0), 0);
-  return { txns, spent, income, byCat, budget, limit };
+  // Bank transactions count too, but only while the bank vault is unlocked.
+  const bank = bankSpending(ym);
+  let spentAll = spent, incomeAll = income;
+  if (bank) {
+    spentAll += bank.spent; incomeAll += bank.income;
+    for (const [c, v] of Object.entries(bank.byCat)) byCat[c] = (byCat[c] || 0) + v;
+  }
+  return { txns, spent: spentAll, income: incomeAll, byCat, budget, limit, bankIncluded: !!bank, bankLocked: vaultExists() && !isUnlocked() };
 }
 
 /** Big "spent of budget" block, used here and on the Today screen. */
@@ -95,7 +103,8 @@ function renderBudget(root, ctx) {
       h('dt', {}, 'Subscriptions'), h('dd', {}, `${money(subsMo)}/mo`),
       h('dt', {}, 'Bills'), h('dd', {}, `${money(billsMo)}/mo`),
       h('dt', {}, 'Fixed costs total'), h('dd', {}, `${money(subsMo + billsMo)}/mo`)),
-    s.budget.isDefault ? h('p', { class: 'hint' }, 'These categories are examples. Tap "Edit budget" to set your own.') : null));
+    s.budget.isDefault ? h('p', { class: 'hint' }, 'These categories are examples. Tap "Edit budget" to set your own.') : null,
+    s.bankIncluded ? h('p', { class: 'hint' }, '🔓 Includes your bank transactions.') : s.bankLocked ? h('p', { class: 'hint' }, '🔒 Bank transactions aren\'t included while the Bank tab is locked.') : null));
 
   // last 6 months
   const months = Array.from({ length: 6 }, (_, i) => addMonths(month + '-01', i - 5).slice(0, 7));
@@ -361,9 +370,10 @@ function renderGoals(root) {
 
 export function render(root, ctx) {
   root.append(pageHead('Money', { actions: [addBtn('Spent', () => editTxn(null))] }));
-  root.append(seg([['budget', 'Budget'], ['spending', 'Spending'], ['bills', 'Bills'], ['goals', 'Goals']], tab, v => { tab = v; ctx.rerender(); }));
+  root.append(seg([['budget', 'Budget'], ['spending', 'Spending'], ['bank', 'Bank'], ['bills', 'Bills'], ['goals', 'Goals']], tab, v => { tab = v; ctx.rerender(); }));
   if (tab === 'budget') renderBudget(root, ctx);
   else if (tab === 'spending') renderSpending(root, ctx);
+  else if (tab === 'bank') renderBank(root, ctx, catNames());
   else if (tab === 'bills') renderBills(root);
   else renderGoals(root);
 }
