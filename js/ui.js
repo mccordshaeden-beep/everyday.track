@@ -178,10 +178,11 @@ export function toast(msg) {
  * fields: [{ name, label, type: text|number|date|time|select|textarea|checkbox|weekdays,
  *            options, suggestions, required, placeholder, step, inputmode, rows, autofocus }]
  */
-export function openForm({ title, fields, values = {}, submitLabel = 'Save', onSubmit, onDelete, deleteLabel = 'Delete' }) {
+export function openForm({ title, fields, values = {}, submitLabel = 'Save', onSubmit, onDelete, deleteLabel = 'Delete', note }) {
   const dlg = h('dialog', { class: 'sheet' });
   const inputs = {};
   const body = h('div', { class: 'sheet-body' });
+  if (note) body.append(h('p', { class: 'hint sheet-note' }, note));
 
   for (const f of fields) {
     const v = values[f.name] ?? f.default ?? '';
@@ -198,6 +199,17 @@ export function openForm({ title, fields, values = {}, submitLabel = 'Save', onS
     } else if (f.type === 'checkbox') {
       input = h('input', { type: 'checkbox', name: f.name });
       input.checked = !!v;
+    } else if (f.type === 'chips') {
+      const chosen = new Set(Array.isArray(v) ? v : []);
+      input = h('div', { class: 'chips' }, f.options.map(([val, label]) => {
+        const b = h('button', { type: 'button', class: chosen.has(val) ? 'chip on' : 'chip', 'aria-pressed': String(chosen.has(val)) }, label);
+        b.addEventListener('click', () => {
+          chosen.has(val) ? chosen.delete(val) : chosen.add(val);
+          b.classList.toggle('on'); b.setAttribute('aria-pressed', String(chosen.has(val)));
+        });
+        return b;
+      }));
+      input.getValue = () => [...chosen];
     } else if (f.type === 'weekdays') {
       const chosen = new Set(Array.isArray(v) ? v : []);
       input = h('div', { class: 'chips' }, ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((l, i) => {
@@ -224,7 +236,7 @@ export function openForm({ title, fields, values = {}, submitLabel = 'Save', onS
     if (f.required) input.required = true;
     inputs[f.name] = input;
 
-    const wrapTag = f.type === 'weekdays' ? 'div' : 'label';
+    const wrapTag = f.type === 'weekdays' || f.type === 'chips' ? 'div' : 'label';
     body.append(h(wrapTag, { class: f.type === 'checkbox' ? 'field check' : 'field' },
       h('span', { class: 'field-label' }, f.label), input, listEl,
       f.hint ? h('small', { class: 'hint' }, f.hint) : null));

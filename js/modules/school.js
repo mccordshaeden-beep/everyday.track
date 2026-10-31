@@ -13,7 +13,8 @@ const CLASSES = 'classes'; // { name, code, instructor, room, color }
 const TASKS = 'tasks';     // assignment = task + { classId, kind, score, outOf }
 const KINDS = ['Homework', 'Quiz', 'Exam', 'Project', 'Paper', 'Lab', 'Reading', 'Other'];
 const COLORS = [['blue', 'Blue'], ['green', 'Green'], ['orange', 'Orange'], ['purple', 'Purple'], ['red', 'Red'], ['teal', 'Teal']];
-let view = 'upcoming';
+let view = 'classes';
+const expanded = new Set(); // classes showing all their assignments
 
 export const classes = () => store.list(CLASSES).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
 const assignments = () => store.list(TASKS).filter(t => t.classId);
@@ -255,20 +256,7 @@ export function render(root, ctx) {
       h('div', { class: 'btn-row' }, btn('Add a class', () => editClass(null), 'primary'))));
     return;
   }
-  root.append(seg([['upcoming', 'Upcoming'], ['classes', 'Classes & grades'], ['done', 'Done']], view, v => { view = v; ctx.rerender(); }));
-
-  if (view === 'upcoming') {
-    const open = assignments().filter(a => !a.done).sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'));
-    const today = ymd();
-    const groups = [
-      ['Overdue', open.filter(a => a.due && a.due < today)],
-      ['Next 7 days', open.filter(a => a.due && a.due >= today && a.due <= ymd(new Date(Date.now() + 7 * 864e5)))],
-      ['Later', open.filter(a => !a.due || a.due > ymd(new Date(Date.now() + 7 * 864e5)))],
-    ].filter(([, l]) => l.length);
-    root.append(groups.length ? h('div', { class: 'stack' }, groups.map(([name, l]) => card(name, { cls: name === 'Overdue' ? 'warn' : '' }, l.map(a => assignmentRow(a)))))
-      : empty('Nothing due. Add assignments with the button above.'));
-    return;
-  }
+  root.append(seg([['classes', 'Classes & grades'], ['done', 'Done']], view, v => { view = v; ctx.rerender(); }));
 
   if (view === 'done') {
     const done = assignments().filter(a => a.done).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
@@ -285,9 +273,16 @@ export function render(root, ctx) {
         h('div', { class: 'card-head' },
           h('button', { type: 'button', class: 'card-title link', onclick: () => editClass(c) }, classLabel(c)),
           g ? h('span', { class: 'grade' }, `${letter(g.pct)} · ${g.pct.toFixed(1)}%`) : h('span', { class: 'muted small' }, 'No grades yet')),
+        open.some(a => a.due && a.due < ymd()) ? h('p', { class: 'bad small' }, `${open.filter(a => a.due && a.due < ymd()).length} overdue`) : null,
         c.code && c.name ? h('p', { class: 'row-sub' }, c.name, c.instructor ? ` · ${c.instructor}` : '', c.room ? ` · ${c.room}` : '') : null,
-        open.length ? open.slice(0, 5).map(a => assignmentRow(a, false)) : empty('No open assignments.'),
-        h('div', { class: 'btn-row' }, btn('+ Assignment', () => editAssignment(null, { classId: c.id }), 'ghost sm')));
+        open.length ? (expanded.has(c.id) ? open : open.slice(0, 6)).map(a => assignmentRow(a, false)) : empty('No open assignments.'),
+        h('div', { class: 'btn-row' },
+          btn('+ Assignment', () => editAssignment(null, { classId: c.id }), 'ghost sm'),
+          open.length > 6 ? btn(expanded.has(c.id) ? 'Show less' : `Show all ${open.length}`, () => { expanded.has(c.id) ? expanded.delete(c.id) : expanded.add(c.id); ctx.rerender(); }, 'ghost sm') : null));
     }),
+    (() => {
+      const loose = store.list(TASKS).filter(t => t.source === 'canvas' && !t.classId && !t.done);
+      return loose.length ? card('Other Canvas items', {}, loose.map(a => assignmentRow(a, false))) : null;
+    })(),
     h('section', { class: 'card add-card' }, btn('+ Add a class', () => editClass(null), 'ghost'))));
 }

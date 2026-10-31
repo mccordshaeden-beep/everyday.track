@@ -431,3 +431,12 @@ ul.ex-list li { display: flex; justify-content: space-between; gap: 12px; font-s
 .inline-time, .inline-sel { width: auto; min-height: 38px; padding: 6px 10px; }
 .canvas-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 14px; }
 .steps-help { margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+
+/* ---------- food settings & find more ---------- */
+.diet-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 14px; }
+.allergy-warn { background: var(--red-soft); color: var(--red); border-radius: 12px; padding: 10px 12px; font-size: 14px; line-height: 1.4; }
+.recipe-img { width: 100%; max-height: 220px; object-fit: cover; border-radius: 14px; background: var(--field); }
+.thumb { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; flex-shrink: 0; background: var(--field); }
+.find-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.find-links a.btn { text-decoration: none; }
+.sheet-note { margin: 0 0 2px; }

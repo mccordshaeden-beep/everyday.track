@@ -7,6 +7,8 @@ import {
   ymd, addDays, parseYmd, fmtDay, relDay, daysBetween, mondayOf,
 } from '../ui.js';
 import { LIBRARY } from '../data/recipes.js';
+import { ALLERGENS, DIETS, conflicts, summary as dietSummary, isSet as dietIsSet } from '../data/diet.js';
+import { callFunction, getStatus } from '../sync.js';
 
 export const id = 'food';
 export const title = 'Food';
@@ -17,13 +19,16 @@ const GROC = 'groceries';   // { name, qty, aisle, note, got }
 const FAV = 'foods';        // recipes & snacks: { kind: 'meal'|'snack', name, type, servings, minutes, ingredients, steps, calories, protein, rating, notes, fromLib }
 const PANTRY = 'pantry';    // { name, where, qty, expires }
 const PLAN = 'mealplan';    // { date, slot, recipe (id or "lib:slug"), name }
-const GOALS_ID = 'settings:food'; // { calories, protein }
+const GOALS_ID = 'settings:food'; // { calories, protein, diet, allergies: [], avoid }
 const SLOTS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
 const PLACES = ['Fridge', 'Freezer', 'Pantry', 'Spices'];
 
 let tab = 'log';
 let day = ymd();
 let recipeView = 'ideas';
+let showHidden = false;
+let findQuery = '';
+let findResults = null; // null = not searched yet
 let week = mondayOf(ymd());
 export function setTab(t) { tab = t; }
 
@@ -62,6 +67,29 @@ const ideas = () => libRecipes().filter(r => !savedSlugs().has(r.slug));
 export const allRecipes = () => [...myRecipes(), ...ideas()];
 export function getRecipe(ref) { return !ref ? null : ref.startsWith('lib:') ? libRecipes().find(r => r.id === ref) : store.get(ref); }
 export const missingFor = (r, pk = pantryKeys()) => lines(r.ingredients).filter(l => !have(l, pk));
+
+// ==== diet & allergies ================================================================
+export const foodPrefs = () => store.get(GOALS_ID) || {};
+const problems = r => conflicts(r, foodPrefs());
+const fits = r => !problems(r).length;
+const warnTag = r => { const p = problems(r); return p.length ? h('span', { class: 'tag red' }, '⚠ ' + p.join(', ')) : null; };
+
+export function editFoodSettings() {
+  const p = foodPrefs();
+  openForm({
+    title: 'Food settings',
+    values: { diet: p.diet || '', allergies: p.allergies || [], avoid: p.avoid || '', calories: p.calories ?? '', protein: p.protein ?? '' },
+    fields: [
+      { name: 'diet', label: 'Diet', type: 'select', options: DIETS },
+      { name: 'allergies', label: 'Allergies & intolerances', type: 'chips', options: ALLERGENS },
+      { name: 'avoid', label: 'Other foods I avoid (comma separated)', placeholder: 'mushrooms, cilantro, spicy…' },
+      { name: 'calories', label: 'Daily calorie target (optional)', type: 'number', min: '0', inputmode: 'numeric' },
+      { name: 'protein', label: 'Daily protein target, grams (optional)', type: 'number', min: '0', inputmode: 'numeric' },
+    ],
+    note: 'Recipes that don\'t fit are hidden from ideas and searches, and flagged with ⚠ everywhere else. This is based on ingredient names, so always double-check labels, especially for serious allergies.',
+    onSubmit: v => { store.save('settings', v, GOALS_ID); toast('Food settings saved'); },
+  });
+}
 
 export function addGroceries(items, note = '') {
   const open = store.list(GROC).filter(g => !g.got).map(g => ingKey(g.name));
@@ -123,6 +151,8 @@ export function openRecipe(r) {
   openSheet({
     title: r.name,
     body: [
+      problems(r).length ? h('div', { class: 'allergy-warn', role: 'alert' }, h('b', {}, '⚠ Doesn\'t fit your food settings: '), problems(r).join(', ')) : null,
+      r.image ? h('img', { class: 'recipe-img', src: r.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : null,
       h('p', { class: 'muted' }, recipeMeta(r), r.calories ? ' (per serving, estimated)' : ''),
       r.tags?.length ? h('div', { class: 'row-meta' }, r.tags.map(t => h('span', { class: 'tag' }, t))) : null,
       h('h3', {}, 'Ingredients', h('span', { class: 'muted small' }, pk.length ? ` · ${ing.length - missing.length} of ${ing.length} at home` : '')),
@@ -132,13 +162,19 @@ export function openRecipe(r) {
       })),
       lines(r.steps).length ? [h('h3', {}, 'Steps'), h('ol', { class: 'steps' }, lines(r.steps).map(s => h('li', {}, s)))] : null,
       r.notes ? [h('h3', {}, 'Notes'), h('p', {}, r.notes)] : null,
+      r.url ? h('p', { class: 'small' }, h('a', { href: r.url, target: '_blank', rel: 'noopener' }, `Original recipe${r.site ? ' on ' + r.site : ''} ↗`)) : null,
       !pk.length ? h('p', { class: 'hint' }, 'Tip: add what you have in Food → Pantry, and the app will only shop for what\'s missing.') : null,
     ],
-    actions: [
+    actions: r.web ? [
+      { label: 'Save to My recipes', cls: 'primary', onClick: () => saveWebRecipe(r) },
+      { label: missing.length ? `Add ${missing.length} missing to groceries` : 'Have everything ✓', disabled: !missing.length, onClick: () => addMissing(r) },
+    ] : [
       { label: 'Plan it', cls: 'primary', onClick: () => planRecipe(r) },
       { label: missing.length ? `Add ${missing.length} missing to groceries` : 'Have everything ✓', disabled: !missing.length, onClick: () => addMissing(r) },
       { label: 'Ate it', onClick: () => logRecipe(r) },
-      r.lib ? { label: 'Save to My recipes', onClick: () => saveLibRecipe(r) } : { label: 'Edit', onClick: () => editRecipe(r) },
+      r.lib ? { label: 'Save to My recipes', onClick: () => saveLibRecipe(r) }
+        : r.web ? { label: 'Save to My recipes', cls: 'primary', onClick: () => saveWebRecipe(r) }
+        : { label: 'Edit', onClick: () => editRecipe(r) },
     ],
   });
 }
@@ -149,28 +185,41 @@ function recipeRow(r, pk) {
     h('div', { class: 'row-main' },
       h('div', { class: 'row-title' }, r.name, r.rating ? h('span', { class: 'stars' }, ' ' + '★'.repeat(Number(r.rating))) : null),
       h('div', { class: 'row-sub' }, recipeMeta(r)),
-      miss != null ? h('div', { class: 'row-meta' }, h('span', { class: miss ? 'tag' : 'tag ok-tag' }, miss ? `Need ${miss} item${miss > 1 ? 's' : ''}` : '✓ You have everything')) : null),
+      (miss != null || problems(r).length) ? h('div', { class: 'row-meta' }, warnTag(r),
+        miss != null ? h('span', { class: miss ? 'tag' : 'tag ok-tag' }, miss ? `Need ${miss} item${miss > 1 ? 's' : ''}` : '✓ You have everything') : null) : null),
     icon('right', 18));
 }
 
 function renderRecipes(root) {
-  root.append(seg([['ideas', 'Ideas'], ['mine', 'My recipes'], ['make', 'What can I make?'], ['snacks', 'Snacks']], recipeView, v => { recipeView = v; reRender(); }));
+  root.append(seg([['ideas', 'Ideas'], ['find', 'Find more'], ['mine', 'My recipes'], ['make', 'Can I make?'], ['snacks', 'Snacks']], recipeView, v => { recipeView = v; showHidden = false; reRender(); }));
   const pk = pantryKeys();
+  const prefs = foodPrefs();
+  // Only show diet info for people who've set restrictions (the ⚙ button at the top opens Food settings).
+  if (dietIsSet(prefs)) root.append(h('div', { class: 'diet-bar' },
+    h('span', { class: 'muted' }, '🍽 ' + dietSummary(prefs)),
+    btn('Change', editFoodSettings, 'ghost sm')));
 
   if (recipeView === 'mine') {
     const list = myRecipes().sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name));
     root.append(card('My recipes', { action: addBtn('New', () => editRecipe(null)) },
       list.length ? list.map(r => recipeRow(r, pk)) : empty('Save recipes from Ideas, or add your own with the New button.')));
+  } else if (recipeView === 'find') {
+    renderFind(root, pk);
   } else if (recipeView === 'ideas') {
     const types = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
-    const list = ideas();
+    const all = ideas();
+    const hidden = all.filter(r => !fits(r));
+    const list = showHidden ? all : all.filter(fits);
+    if (hidden.length) root.append(h('div', { class: 'diet-bar' },
+      h('span', { class: 'muted' }, `${plural(hidden.length, 'idea')} hidden because of your food settings`),
+      btn(showHidden ? 'Hide them' : 'Show them', () => { showHidden = !showHidden; reRender(); }, 'ghost sm')));
     root.append(h('div', { class: 'stack' }, types.map(t => {
       const group = list.filter(r => r.type === t);
       return group.length ? card(t === 'Snack' ? 'Snacks' : t, {}, group.map(r => recipeRow(r, pk))) : null;
     })));
   } else if (recipeView === 'make') {
     if (!pk.length) { root.append(card('Fill your pantry first', {}, h('p', { class: 'muted' }, 'Add what you have in the Pantry tab, and this will show which recipes you can make right now and which only need a couple of things.'), h('div', { class: 'btn-row' }, btn('Go to Pantry', () => { tab = 'pantry'; reRender(); }, 'primary')))); return; }
-    const scored = allRecipes().map(r => ({ r, miss: missingFor(r, pk) })).sort((a, b) => a.miss.length - b.miss.length);
+    const scored = allRecipes().filter(fits).map(r => ({ r, miss: missingFor(r, pk) })).sort((a, b) => a.miss.length - b.miss.length);
     const ready = scored.filter(x => !x.miss.length);
     const close = scored.filter(x => x.miss.length > 0 && x.miss.length <= 2);
     root.append(card('Ready to cook', {}, ready.length ? ready.map(x => recipeRow(x.r, pk)) : empty('Nothing complete yet. See below for what\'s close.')));
@@ -184,6 +233,83 @@ function renderRecipes(root) {
     root.append(card('Snacks I like', { action: addBtn('Add', () => editSnack(null)) },
       list.length ? list.map(snackRow) : empty('Save snacks you like so they are easy to log and restock.')));
   }
+}
+
+// ==== find more recipes (online) ============================================================
+const cleanLine = l => String(l).replace(/\s*\(\$[\d.,]+\*?\)/g, '').replace(/\s+/g, ' ').trim(); // drop "($0.20)" price notes
+
+function webRecipe(x) {
+  return { ...x, id: 'web:' + (x.sourceId || x.url), web: true, kind: 'meal', ingredients: (x.ingredients || []).map(cleanLine), steps: x.steps || [] };
+}
+
+function saveWebRecipe(r) {
+  const { id: _i, web, sourceId, source, category, cuisine, video, ...rest } = r;
+  const already = myRecipes().find(m => m.url && m.url === r.url);
+  if (already) { toast('Already in My recipes'); return; }
+  store.save(FAV, { ...rest, ingredients: lines(r.ingredients).join('\n'), steps: lines(r.steps).join('\n'), kind: 'meal', tags: undefined });
+  toast(`Saved "${r.name}" to My recipes`);
+}
+
+async function doSearch(q) {
+  findQuery = q;
+  showHidden = false;
+  findResults = 'loading';
+  reRender();
+  try {
+    const { results } = await callFunction('recipes', { action: 'search', q });
+    findResults = results.map(webRecipe);
+  } catch (e) {
+    findResults = { error: e.message };
+  }
+  reRender();
+}
+
+function importFromLink() {
+  openForm({
+    title: 'Import a recipe',
+    fields: [{ name: 'url', label: 'Recipe page link', type: 'url', required: true, autofocus: true, placeholder: 'https://…',
+      hint: 'Works with most recipe websites and blogs (Budget Bytes, Food Network, BBC Good Food, NYT Cooking…). A few big sites like Allrecipes block it.' }],
+    submitLabel: 'Import',
+    onSubmit: v => {
+      toast('Reading the recipe…');
+      callFunction('recipes', { action: 'import', url: v.url })
+        .then(({ recipe }) => openRecipe(webRecipe(recipe)))
+        .catch(e => toast(e.message));
+    },
+  });
+}
+
+function renderFind(root, pk) {
+  if (!getStatus().user) { root.append(empty('Sign in to search for more recipes.')); return; }
+  const input = h('input', { type: 'search', placeholder: 'Search recipes: "pasta", "chicken", "curry"…', value: findQuery, 'data-fk': 'recipe-find', enterkeyhint: 'search', 'aria-label': 'Search recipes' });
+  root.append(h('form', { class: 'quick', onsubmit: e => { e.preventDefault(); const q = input.value.trim(); if (q.length >= 2) doSearch(q); } },
+    input, h('button', { type: 'submit', class: 'icon-btn solid', 'aria-label': 'Search' }, icon('search', 20))));
+
+  root.append(h('div', { class: 'find-links' },
+    btn('🔗 Import from a link', importFromLink, 'ghost sm'),
+    findQuery ? h('a', { class: 'btn ghost sm', href: `https://www.google.com/search?q=${encodeURIComponent(findQuery + ' recipe')}`, target: '_blank', rel: 'noopener' }, `Search the web for "${findQuery}" ↗`) : null));
+
+  if (findResults === null) {
+    root.append(card('Find more recipes', {},
+      h('p', { class: 'muted' }, 'Search a free recipe database by dish or main ingredient. Or find a recipe anywhere online, copy its link, and tap "Import from a link".'),
+      h('div', { class: 'chip-row' }, ['Chicken', 'Pasta', 'Beef', 'Vegetarian', 'Breakfast', 'Seafood', 'Dessert', 'Soup'].map(q => btn(q, () => doSearch(q), 'chip-btn')))));
+    return;
+  }
+  if (findResults === 'loading') { root.append(empty('Searching…')); return; }
+  if (findResults.error) { root.append(empty(findResults.error)); return; }
+  const ok = findResults.filter(fits), hid = findResults.length - ok.length;
+  const list = showHidden ? findResults : ok;
+  root.append(card(`${plural(findResults.length, 'result')} for "${findQuery}"`, {
+    action: hid ? btn(showHidden ? 'Hide unsafe' : `Show ${hid} hidden`, () => { showHidden = !showHidden; reRender(); }, 'ghost sm') : null,
+  }, list.length ? list.map(r => h('div', { class: 'row', onclick: () => openRecipe(r) },
+    r.image ? h('img', { class: 'thumb', src: r.image + '/preview', alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : null,
+    h('div', { class: 'row-main' },
+      h('div', { class: 'row-title' }, r.name),
+      h('div', { class: 'row-sub' }, [r.cuisine, r.category, `${r.ingredients.length} ingredients`].filter(Boolean).join(' · ')),
+      h('div', { class: 'row-meta' }, warnTag(r), pk.length ? h('span', { class: 'tag' }, `Need ${missingFor(r, pk).length}`) : null)),
+    icon('right', 18)))
+    : empty(findResults.length ? 'All results were hidden by your food settings.' : 'No recipes found. Try a simpler word like "chicken" or "soup".')));
+  root.append(h('p', { class: 'hint' }, 'Recipe search by TheMealDB. Calories aren\'t included for these, so you can add them when you save.'));
 }
 
 // ==== snacks ===========================================================================
@@ -206,7 +332,8 @@ function snackRow(f) {
   return h('div', { class: 'row' },
     h('div', { class: 'row-main', onclick: () => editSnack(f) },
       h('div', { class: 'row-title' }, f.name, f.rating ? h('span', { class: 'stars' }, ' ' + '★'.repeat(Number(f.rating))) : null),
-      h('div', { class: 'row-sub' }, [f.where, f.calories ? `${f.calories} cal` : ''].filter(Boolean).join(' · '))),
+      h('div', { class: 'row-sub' }, [f.where, f.calories ? `${f.calories} cal` : ''].filter(Boolean).join(' · ')),
+      problems(f).length ? h('div', { class: 'row-meta' }, warnTag(f)) : null),
     h('div', { class: 'row-actions' },
       btn('Ate it', () => { store.save(LOG, { name: f.name, slot: 'Snacks', date: ymd(), calories: f.calories || '', protein: f.protein || '' }); toast(`Logged ${f.name}`); }, 'ghost sm'),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Add to grocery list', title: 'Add to grocery list', onclick: () => toast(addGroceries([f.name]) ? 'Added to groceries' : 'Already on your list') }, icon('cart', 20))));
@@ -255,17 +382,6 @@ export function dayTotals(d) {
 }
 const foodGoals = () => store.get(GOALS_ID) || {};
 
-function editGoals() {
-  openForm({
-    title: 'Daily targets',
-    values: foodGoals(),
-    fields: [
-      { name: 'calories', label: 'Calories per day (optional)', type: 'number', min: '0', inputmode: 'numeric' },
-      { name: 'protein', label: 'Protein per day, grams (optional)', type: 'number', min: '0', inputmode: 'numeric' },
-    ],
-    onSubmit: v => { store.save('settings', v, GOALS_ID); },
-  });
-}
 
 function totalsBlock(d) {
   const t = dayTotals(d), g = foodGoals();
@@ -292,7 +408,7 @@ export function mealsSummary(d) {
 
 function renderLog(root) {
   root.append(dayNav(day, d => { day = d; reRender(); }));
-  root.append(card(day === ymd() ? 'Today' : fmtDay(day), { action: btn('Targets', editGoals, 'ghost sm') }, totalsBlock(day),
+  root.append(card(day === ymd() ? 'Today' : fmtDay(day), { action: btn('Targets', editFoodSettings, 'ghost sm') }, totalsBlock(day),
     h('p', { class: 'hint' }, 'Calories and protein from recipes are rough estimates.')));
   const entries = mealsOn(day);
   const planned = store.list(PLAN).filter(p => p.date === day);
@@ -330,7 +446,7 @@ function planRecipe(r, defaults = {}) {
 }
 
 function pickForDay(date, slot = 'Dinner') {
-  const opts = [['', 'Choose a recipe…'], ...myRecipes().map(r => [r.id, '★ ' + r.name]), ...ideas().map(r => [r.id, r.name])];
+  const opts = [['', 'Choose a recipe…'], ...myRecipes().map(r => [r.id, (fits(r) ? '★ ' : '⚠ ') + r.name]), ...ideas().filter(fits).map(r => [r.id, r.name])];
   openForm({
     title: `Plan ${fmtDay(date)}`,
     values: { slot },
@@ -510,7 +626,7 @@ function renderGroceries(root) {
 let reRender = () => {};
 export function render(root, ctx) {
   reRender = ctx.rerender;
-  root.append(pageHead('Food', { actions: [addBtn('Log', () => editLog(null))] }));
+  root.append(pageHead('Food', { actions: [iconBtn('settings', editFoodSettings, 'Food settings: allergies, diet, targets'), addBtn('Log', () => editLog(null))] }));
   const gc = groceryCount();
   root.append(seg([['log', 'Ate'], ['plan', 'Plan'], ['recipes', 'Recipes'], ['pantry', 'Pantry'], ['groceries', `Groceries${gc ? ` (${gc})` : ''}`]],
     tab, v => { tab = v; reRender(); }));
