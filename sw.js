@@ -6,7 +6,7 @@
 // new version, close and reopen the app (sometimes twice) to see it.
 // Bump CACHE when you add or rename files so old copies get cleaned up.
 
-const CACHE = 'everyday-v2';
+const CACHE = 'everyday-v3';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/login.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/config.js',

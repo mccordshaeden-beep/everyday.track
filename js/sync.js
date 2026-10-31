@@ -152,7 +152,7 @@ export async function signIn(email, password) {
 }
 
 export async function signUp(email, password) {
-  const { data, error } = await client.auth.signUp({ email, password });
+  const { data, error } = await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
   if (error) throw error;
   return data; // if email confirmation is on, data.session is null until they confirm
 }

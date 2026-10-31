@@ -9,5 +9,5 @@
 // Row Level Security rules in supabase/schema.sql, which only let a signed-in
 // user read and write their own rows. NEVER put the secret / service_role key here.
 
-export const SUPABASE_URL = '';
-export const SUPABASE_KEY = '';
+export const SUPABASE_URL = 'https://rzkcynppocaxgydmsyvu.supabase.co';
+export const SUPABASE_KEY = 'sb_publishable_NxuyfrlVrcj1usadfAk3ow_hAeoObzI';
