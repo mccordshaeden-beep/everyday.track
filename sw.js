@@ -6,10 +6,10 @@
 // new version, close and reopen the app (sometimes twice) to see it.
 // Bump CACHE when you add or rename files so old copies get cleaned up.
 
-const CACHE = 'everyday-v5';
+const CACHE = 'everyday-v6';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'js/app.js', 'js/login.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/config.js',
+  'js/app.js', 'js/login.js', 'js/reminders.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/config.js',
   'js/modules/index.js', 'js/modules/today.js', 'js/modules/tasks.js', 'js/modules/calendar.js',
   'js/modules/food.js', 'js/modules/money.js', 'js/modules/habits.js', 'js/modules/notes.js', 'js/modules/chores.js', 'js/modules/school.js', 'js/modules/workouts.js', 'js/modules/search.js', 'js/data/recipes.js',
   'js/modules/settings.js', 'js/modules/more.js',
@@ -45,5 +45,31 @@ self.addEventListener('fetch', e => {
     if (res) return res;
     if (req.mode === 'navigate') return (await cache.match('index.html')) || Response.error();
     return Response.error();
+  })());
+});
+
+// ---- notifications -------------------------------------------------------------------
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data.json(); } catch { d = { title: 'Everyday', body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Everyday', {
+    body: d.body || '',
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    tag: d.tag,
+    data: { url: d.url || '#/today' },
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const hash = e.notification.data?.url || '#/today';
+  const url = new URL(hash, self.registration.scope).href;
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const w of wins) {
+      if ('focus' in w) { w.postMessage({ type: 'open', hash }); return w.focus(); }
+    }
+    return self.clients.openWindow(url);
   })());
 });

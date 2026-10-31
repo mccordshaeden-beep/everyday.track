@@ -173,3 +173,19 @@ export async function resetPassword(email) {
   const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
   if (error) throw error;
 }
+
+/** The Supabase client (null until sync has loaded). */
+export function getClient() { return client; }
+
+/** Call one of our server functions; throws an Error with a readable message. */
+export async function callFunction(name, body) {
+  if (!client) throw new Error('Not connected yet. Try again in a moment.');
+  const { data, error } = await client.functions.invoke(name, { body });
+  if (error) {
+    let msg = error.message;
+    try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch {}
+    throw new Error(msg);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}

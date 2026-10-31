@@ -3,6 +3,7 @@ import * as store from '../store.js';
 import { getStatus, signIn, signUp, signOut, syncNow } from '../sync.js';
 import { h, pageHead, card, btn, toast, paintDots } from '../ui.js';
 import { modules } from './index.js';
+import * as rem from '../reminders.js';
 
 export const id = 'settings';
 export const title = 'Settings';
@@ -70,7 +71,10 @@ function syncCard(ctx) {
     h('div', { class: 'btn-row' },
       btn('Sync now', () => syncNow(), 'primary'),
       btn('Sign out', async () => {
-        if (confirm('Sign out? Your data stays safe in your account and is removed from this device until you sign in again.')) await signOut();
+        if (confirm('Sign out? Your data stays safe in your account and is removed from this device until you sign in again.')) {
+          try { await rem.disableHere(); } catch {} // stop this device getting your reminders
+          await signOut();
+        }
       }, 'ghost')));
 }
 
@@ -112,6 +116,54 @@ function appearanceCard(ctx) {
       h('button', { type: 'button', class: v === t ? 'on' : '', onclick: () => { try { localStorage.setItem('everyday:theme', v); } catch {} applyTheme(); ctx.rerender(); } }, label))));
 }
 
+function remindersCard(ctx) {
+  const s = getStatus();
+  const cfg = rem.getConfig();
+  if (!s.configured || !s.user) return card('Reminders', {}, h('p', { class: 'muted' }, 'Sign in to get reminders on your phone.'));
+  const msg = h('p', { class: 'muted', role: 'status' });
+  const here = h('button', { type: 'button', class: 'btn primary', disabled: true }, 'Checking…');
+  const testBtn = btn('Send a test', async () => {
+    msg.textContent = 'Sending…';
+    try { const r = await rem.sendTest(); msg.textContent = r.sent ? `Sent to ${r.sent} device${r.sent > 1 ? 's' : ''}. It should pop up in a few seconds.` : 'No device received it. Try turning reminders off and on again.'; }
+    catch (e) { msg.textContent = e.message; }
+  }, 'ghost');
+  rem.enabledHere().then(on => {
+    here.disabled = false;
+    here.textContent = on ? 'Turn off on this device' : 'Turn on for this device';
+    here.className = on ? 'btn ghost' : 'btn primary';
+    here.onclick = async () => {
+      msg.textContent = on ? 'Turning off…' : 'Turning on…';
+      try {
+        if (on) { await rem.disableHere(); msg.textContent = 'Reminders are off on this device.'; }
+        else { await rem.enableHere(); msg.textContent = 'Reminders are on for this device ✓ Tap "Send a test" to try it.'; }
+      } catch (e) { msg.textContent = e.message; }
+      ctx.rerender();
+    };
+  });
+
+  const setCfg = patch => { rem.saveConfig(patch); };
+  const timeInput = (key) => h('input', { type: 'time', value: cfg[key], class: 'inline-time', onchange: e => setCfg({ [key]: e.target.value }) });
+  const toggle = (key, label, extra) => h('label', { class: 'rem-opt' },
+    h('input', { type: 'checkbox', checked: cfg[key], onchange: e => setCfg({ [key]: e.target.checked }) }),
+    h('span', {}, label), extra || null);
+
+  const iosNote = rem.isIOS() && !rem.isStandalone()
+    ? h('p', { class: 'hint' }, 'On iPhone/iPad, reminders only work in the installed app: Share → Add to Home Screen, then open Everyday from that icon.') : null;
+
+  return card('Reminders', {},
+    h('p', { class: 'muted' }, 'Get notifications for your day, upcoming events, and things due tomorrow. Turn it on for each device you want them on.'),
+    iosNote,
+    h('div', { class: 'btn-row' }, here, testBtn),
+    msg,
+    cfg.enabled ? h('div', { class: 'rem-opts' },
+      toggle('morningOn', 'Morning summary at', timeInput('morning')),
+      toggle('eventsOn', 'Before events:', h('select', { class: 'inline-sel', onchange: e => setCfg({ eventMinutes: Number(e.target.value) }) },
+        [10, 15, 30, 60, 120].map(m => h('option', { value: m, selected: Number(cfg.eventMinutes) === m }, m < 60 ? `${m} min` : `${m / 60} hr`)))),
+      toggle('eveningOn', '"Due tomorrow" at', timeInput('evening')),
+      h('p', { class: 'hint' }, 'Reminders are planned 10 days ahead and refresh whenever you open the app.'),
+      h('div', { class: 'btn-row' }, btn('Pause all reminders', async () => { rem.saveConfig({ enabled: false }); await rem.reschedule(); ctx.rerender(); }, 'ghost sm'))) : null);
+}
+
 function backupCard() {
   const file = h('input', {
     type: 'file', accept: 'application/json,.json', hidden: true,
@@ -148,7 +200,7 @@ function installCard() {
 export function render(root, ctx) {
   root.append(pageHead('Settings'));
   root.append(h('div', { class: 'grid' },
-    syncCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
+    syncCard(ctx), remindersCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
     card('This device', {},
       h('p', { class: 'muted' }, 'Erase removes the data stored on this device only. If you are signed in, it downloads again on the next sync.'),
       btn('Erase data on this device', () => {

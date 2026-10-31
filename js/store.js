@@ -137,3 +137,6 @@ export function eraseLocal() {
 window.addEventListener('storage', e => {
   if (e.key === KEY) { items = read(KEY, {}); meta = { dirty: {}, ...read(META, {}) }; emit('remote'); }
 });
+
+/** True if this id was ever saved here (even if deleted since). Used so imports don't bring back things you deleted. */
+export function known(id) { return !!items[id]; }

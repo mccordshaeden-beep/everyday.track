@@ -8,6 +8,8 @@ import { initSync, onStatus, getStatus, updatePassword } from './sync.js';
 import { h, icon, paintDots, openForm, toast } from './ui.js';
 import { DEFAULT_TABS, isOn, applyTheme } from './modules/settings.js';
 import { renderLogin } from './login.js';
+import { startAutoSchedule } from './reminders.js';
+import { autoImportCanvas } from './modules/school.js';
 
 const main = document.getElementById('main');
 const sidebar = document.getElementById('sidebar');
@@ -129,7 +131,16 @@ setInterval(() => {
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('./sw.js').catch(err => console.warn('Service worker failed', err));
+  // Tapping a notification while the app is open: go to the right screen.
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type === 'open' && e.data.hash) location.hash = e.data.hash;
+  });
 }
+
+// Reminders + Canvas import keep themselves up to date once you're signed in.
+startAutoSchedule();
+let canvasChecked = false;
+onStatus(s => { if (s.user && s.state === 'idle' && !canvasChecked) { canvasChecked = true; autoImportCanvas(); } });
 
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
