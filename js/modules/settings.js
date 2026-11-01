@@ -1,4 +1,5 @@
 // settings.js — sign in for sync, choose the phone tab bar, back up your data.
+import { securityCard } from '../security.js';
 import * as store from '../store.js';
 import { getStatus, signIn, signUp, signOut, syncNow, getClient } from '../sync.js';
 import { SUPABASE_URL } from '../config.js';
@@ -299,7 +300,7 @@ function installCard() {
 export function render(root, ctx) {
   root.append(pageHead('Settings'));
   root.append(h('div', { class: 'grid' },
-    syncCard(ctx), sharingCard(), remindersCard(ctx), museCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
+    syncCard(ctx), securityCard(ctx), sharingCard(), remindersCard(ctx), museCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
     card('This device', {},
       h('p', { class: 'muted' }, 'Erase removes the data stored on this device only. If you are signed in, it downloads again on the next sync.'),
       btn('Erase data on this device', () => {

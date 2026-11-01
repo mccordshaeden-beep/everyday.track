@@ -11,3 +11,8 @@
 
 export const SUPABASE_URL = 'https://rzkcynppocaxgydmsyvu.supabase.co';
 export const SUPABASE_KEY = 'sb_publishable_NxuyfrlVrcj1usadfAk3ow_hAeoObzI';
+
+// Optional "are you a human?" check on sign-up / sign-in (Cloudflare Turnstile, free).
+// Leave blank to skip. To turn it on: README → "Bot protection". The secret key goes in
+// Supabase (Authentication → Attack Protection), never here.
+export const TURNSTILE_SITE_KEY = '';

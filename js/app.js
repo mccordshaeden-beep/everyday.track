@@ -5,10 +5,12 @@
 import { modules, byId } from './modules/index.js';
 import * as calendarMod from './modules/calendar.js';
 import * as store from './store.js';
-import { initSync, onStatus, getStatus, updatePassword, onHouseholds } from './sync.js';
+import { initSync, onStatus, getStatus, updatePassword, onHouseholds, signOut } from './sync.js';
+import { initLock } from './lock.js';
+import * as vault from './vault.js';
 import { h, icon, paintDots, openForm, toast } from './ui.js';
 import { DEFAULT_TABS, isOn, applyTheme } from './modules/settings.js';
-import { renderLogin } from './login.js';
+import { renderLogin, renderMfa, passwordProblems } from './login.js';
 import { startAutoSchedule } from './reminders.js';
 import { autoImportCanvas } from './modules/school.js';
 
@@ -39,6 +41,7 @@ function gate() {
   if (!s.configured) return 'app';           // no sync set up: single-device mode
   if (s.state === 'loading') return 'loading';
   if (!s.user && s.state === 'signed-out') return 'login';
+  if (s.user && s.needsMfa) return 'mfa';     // password OK, 2-step code still needed
   return 'app';                              // signed in, or offline with this device's copy
 }
 
@@ -47,6 +50,7 @@ function render(keepScroll = false) {
   document.body.dataset.gate = g;
   if (g === 'loading') { main.replaceChildren(h('div', { class: 'splash' }, h('img', { src: 'icons/icon-192.png', alt: 'Everyday', width: 72, height: 72 }))); return; }
   if (g === 'login') { main.replaceChildren(renderLogin(() => render())); document.title = 'Sign in · Everyday'; return; }
+  if (g === 'mfa') { main.replaceChildren(renderMfa(() => render())); document.title = 'Two-step check · Everyday'; return; }
 
   const id = currentId();
   const mod = byId[id];
@@ -108,16 +112,17 @@ document.addEventListener('sheet-closed', flushPending);
 let lastKey;
 onStatus(s => {
   paintDots();
-  const key = gate() + ':' + (s.user?.id || '');
+  const key = gate() + ':' + (s.user?.id || '') + ':' + (s.needsMfa ? 'mfa' : '');
   if (key !== lastKey) { lastKey = key; render(); }
 });
 
 // Opened from a "reset password" email.
 document.addEventListener('password-recovery', () => openForm({
   title: 'New password',
-  fields: [{ name: 'password', label: 'New password (8+ characters)', type: 'password', required: true, autofocus: true }],
+  fields: [{ name: 'password', label: 'New password (12+ characters)', type: 'password', required: true, autofocus: true }],
   onSubmit: v => {
-    if (v.password.length < 8) { toast('Use at least 8 characters'); return false; }
+    const p = passwordProblems(v.password, getStatus().user?.email || '');
+    if (p.length) { toast(p[0]); return false; }
     updatePassword(v.password).then(() => toast('Password updated')).catch(e => toast(e.message));
   },
 }));
@@ -159,7 +164,22 @@ startAutoSchedule();
 let canvasChecked = false;
 onStatus(s => { if (s.user && s.state === 'idle' && !canvasChecked) { canvasChecked = true; autoImportCanvas(); } });
 
+// Notes/journal decrypted in the background → redraw.
+document.addEventListener('everyday-rerender', () => { if (gate() === 'app') render(true); });
+
+// Don't let another site show Everyday inside a frame (stops click-tricking).
+if (window.top !== window.self) { document.documentElement.style.display = 'none'; try { window.top.location = window.location.href; } catch {} }
+
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 render();
+initLock({
+  signedIn: () => !!(getStatus().user || store.getMeta('ownerId')),
+  onSignOut: async () => {
+    try { await vault.forgetOnDevice(); } catch {}
+    try { await signOut(); } catch { store.eraseLocal(); }
+    for (const k of Object.keys(localStorage)) if (k.startsWith('sb-')) localStorage.removeItem(k); // drop the saved login too
+  },
+});
 initSync();
+vault.tryRemembered();

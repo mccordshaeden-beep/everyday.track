@@ -1,7 +1,9 @@
 // notes.js — notes with checklists and simple formatting, folders, tags and
 // colors, templates, links to classes/events, and a daily journal.
-// Everything here is private to your account.
+// Everything here is private to your account. Locked notes and (optionally) the whole
+// journal are encrypted on the device with the private vault (see ../vault.js).
 import * as store from '../store.js';
+import * as vault from '../vault.js';
 import { h, pageHead, empty, addBtn, btn, card, openSheet, toast, relDay, ymd, addDays, parseYmd } from '../ui.js';
 
 export const id = 'notes';
@@ -27,11 +29,57 @@ export function focusItem(x) {
 /** Used by School: show the notes linked to one class. */
 export function showLinked(link) { tab = 'notes'; filter = 'link:' + link; query = ''; }
 
+// ---- encryption (locked notes + encrypted journal) ----------------------------------------
+// A locked record keeps folder/color/pin/link/dates readable (so lists can be organized) and
+// moves everything you wrote (title, text, mood, highlight…) into `enc`, sealed with the vault.
+const SECRET = ['title', 'body', 'mood', 'highlight', 'grateful', 'prompt'];
+const SEC_ID = 'settings:notesec'; // { journal: true } = encrypt journal entries
+export const journalLocked = () => !!store.get(SEC_ID)?.journal;
+const opened = new Map(); // enc.iv → decrypted fields (only while the vault is unlocked)
+let decrypting = false;
+const rerenderSoon = () => document.dispatchEvent(new Event('everyday-rerender'));
+async function decryptPending() {
+  if (decrypting || !vault.isUnlocked()) return;
+  decrypting = true;
+  let any = false;
+  try {
+    for (const n of store.list(COL)) {
+      if (!n.enc || opened.has(n.enc.iv)) continue;
+      try { opened.set(n.enc.iv, await vault.open(n.enc)); any = true; } catch { opened.set(n.enc.iv, { title: '⚠ Can\'t decrypt', body: 'This was locked with a different vault password.' }); any = true; }
+    }
+  } finally { decrypting = false; }
+  if (any) rerenderSoon();
+}
+vault.onVault(() => { if (!vault.isUnlocked()) opened.clear(); decryptPending(); rerenderSoon(); });
+store.subscribe(() => { if (vault.isUnlocked()) decryptPending(); });
+/** The readable version of a record (or a sealed placeholder while the vault is locked). */
+function reveal(n) {
+  if (!n?.enc) return n;
+  const c = opened.get(n.enc.iv);
+  if (c) return { ...n, ...c };
+  if (vault.isUnlocked()) queueMicrotask(decryptPending);
+  return { ...n, _sealed: true };
+}
+/** Save a note/entry, encrypting it when it's locked (or a journal entry with journal encryption on). */
+export async function writeNote(id, fields) {
+  const { id: _i, created: _c, edit: _e, _sealed, enc: _old, ...f } = fields;
+  const seal = f.kind === 'journal' ? journalLocked() : !!f.locked;
+  if (seal) {
+    const secret = Object.fromEntries(SECRET.map(k => [k, f[k] ?? '']));
+    const enc = await vault.seal(secret);
+    opened.set(enc.iv, secret);
+    return store.save(COL, { ...f, ...Object.fromEntries(SECRET.map(k => [k, ''])), enc }, id);
+  }
+  return store.save(COL, { ...f, enc: null }, id);
+}
+
 const isJournal = n => n.kind === 'journal';
-export const notes = () => store.list(COL).filter(n => !isJournal(n));
-export const journal = () => store.list(COL).filter(isJournal).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+export const notes = () => store.list(COL).filter(n => !isJournal(n)).map(reveal);
+export const journal = () => store.list(COL).filter(isJournal).map(reveal).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 const journalId = d => `journal:${d}`;
-export const entryOn = d => { const e = store.get(journalId(d)); return e && isJournal(e) ? { id: journalId(d), ...e } : null; };
+export const entryOn = d => { const e = store.get(journalId(d)); return e && isJournal(e) ? reveal({ id: journalId(d), ...e }) : null; };
+/** Everything readable right now (used by Search). */
+export const searchable = () => store.list(COL).map(reveal).filter(n => !n._sealed);
 export const linkedNotes = link => notes().filter(n => n.link === link);
 
 // ---- formatting (a small, safe Markdown subset) -------------------------------------------
@@ -239,6 +287,61 @@ function importHelp(navigate) {
   });
 }
 
+// ---- vault: set up / unlock -----------------------------------------------------------------
+async function afterUnlock(then) { await decryptPendingNow(); then?.(); }
+async function decryptPendingNow() { for (let i = 0; i < 50 && decrypting; i++) await new Promise(r => setTimeout(r, 20)); await decryptPending(); }
+/** Run `then` once the vault is open: sets it up the first time, or asks for the vault password. */
+export async function ensureUnlocked(then) {
+  if (vault.isUnlocked()) return then?.();
+  if (await vault.tryRemembered()) return afterUnlock(then);
+  if (vault.exists()) unlockVault(then); else setupVault(then);
+}
+function setupVault(then) {
+  const pw = vault.generatePassword();
+  const msg = h('p', { class: 'bad small', role: 'status' });
+  const saved = h('input', { type: 'checkbox' });
+  const remember = h('input', { type: 'checkbox', checked: true });
+  const go = h('button', { type: 'button', class: 'btn primary', disabled: true, onclick: async () => {
+    go.disabled = true; go.textContent = 'Setting up…';
+    try { await vault.create(pw, remember.checked); dlg.close(); toast('Private vault ready 🔒'); afterUnlock(then); }
+    catch (e) { msg.textContent = e.message; go.disabled = false; go.textContent = 'Create vault'; }
+  } }, 'Create vault');
+  saved.addEventListener('change', () => { go.disabled = !saved.checked; });
+  const dlg = openSheet({
+    title: 'Set up your private vault',
+    body: [
+      h('p', {}, 'Locked notes and your journal get encrypted on this device before they sync. The database only stores scrambled text, so nobody can read them without your vault password. That includes someone who learns your account password, and the database owner.'),
+      h('p', { class: 'field-label' }, 'Your vault password'),
+      h('div', { class: 'copy-box vault-pw' }, h('code', {}, pw), btn('Copy', () => navigator.clipboard?.writeText(pw).then(() => toast('Copied ✓')), 'ghost sm')),
+      h('p', { class: 'hint' }, 'Save it in a password manager (like iPhone Passwords) or write it down. You need it once on each new device. If you lose it, locked notes can\'t be recovered. That\'s what keeps them safe.'),
+      h('label', { class: 'check-row' }, saved, ' I saved my vault password somewhere safe'),
+      h('label', { class: 'check-row' }, remember, ' Remember on this device (pair this with the app lock in Settings)'),
+      msg, h('div', { class: 'btn-row' }, go)],
+  });
+}
+function unlockVault(then) {
+  const input = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'XXXXX-XXXXX-…', 'aria-label': 'Vault password' });
+  const remember = h('input', { type: 'checkbox', checked: true });
+  const msg = h('p', { class: 'bad small', role: 'status' });
+  const go = h('button', { type: 'submit', class: 'btn primary' }, 'Unlock');
+  const form = h('form', { class: 'stack-sm', onsubmit: async e => {
+    e.preventDefault(); go.disabled = true; go.textContent = 'Unlocking…'; msg.textContent = '';
+    try { await vault.unlock(input.value, remember.checked); dlg.close(); afterUnlock(then); }
+    catch (err) { msg.textContent = err.message; go.disabled = false; go.textContent = 'Unlock'; }
+  } }, input, h('label', { class: 'check-row' }, remember, ' Remember on this device'), msg, go);
+  const dlg = openSheet({ title: 'Unlock private vault', body: [h('p', { class: 'muted' }, 'Enter the vault password you saved when you set it up. Dashes and capitals don\'t matter.'), form,
+    h('p', { class: 'hint' }, 'Lost it? It can\'t be recovered. Settings → Security can reset the vault, which permanently deletes the locked notes.')] });
+  setTimeout(() => input.focus(), 60);
+}
+/** Turn journal encryption on or off (re-saves every entry). */
+async function setJournalLocked(on) {
+  await new Promise(res => ensureUnlocked(res));
+  const entries = journal().filter(x => !x._sealed);
+  store.save('settings', { journal: on }, SEC_ID);
+  for (const e of entries) await writeNote(e.id, e);
+  toast(on ? `Journal encrypted 🔒 (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'})` : 'Journal encryption turned off');
+}
+
 // ---- the editor ---------------------------------------------------------------------------
 const MOODS = [['1', 'Awful'], ['2', 'Low'], ['3', 'Okay'], ['4', 'Good'], ['5', 'Great']];
 const PROMPTS = [
@@ -257,6 +360,10 @@ const promptFor = (d, shift = 0) => { let x = shift; for (const c of d) x = (x *
 /** Open a note (or a new one with `defaults`) in a full editor that saves as you type. */
 export function openNote(n, defaults = {}, navigate) {
   const journalMode = defaults.kind === 'journal' || n?.kind === 'journal';
+  if (n?._sealed || (journalMode && journalLocked() && !vault.isUnlocked()) || (n?.locked && !vault.isUnlocked())) {
+    ensureUnlocked(() => { const fresh = n?.id && store.get(n.id); openNote(fresh ? reveal({ id: n.id, ...fresh }) : null, defaults, navigate); });
+    return null;
+  }
   let noteId = n?.id || (journalMode ? journalId(defaults.date) : null);
   let data = { title: '', body: '', folder: '', color: '', link: '', pinned: false, ...defaults, ...(n || {}) };
   let mode = n && data.body && !defaults.edit ? 'view' : 'edit';
@@ -269,9 +376,10 @@ export function openNote(n, defaults = {}, navigate) {
     if (!dirty) return;
     dirty = false;
     if (!noteId && !hasContent()) return;
-    const { id: _i, created: _c, edit: _e, ...fields } = data;
-    noteId = store.save(COL, { ...fields, edited: ymd(), ts: Date.now() }, noteId || undefined);
-    status.textContent = 'Saved ✓';
+    noteId = noteId || store.uid();
+    writeNote(noteId, { ...data, edited: ymd(), ts: Date.now() })
+      .then(() => { status.textContent = (data.locked || (journalMode && journalLocked())) ? 'Saved & encrypted 🔒' : 'Saved ✓'; })
+      .catch(e => { status.textContent = 'Not saved: ' + e.message; dirty = true; });
   }
   const change = patch => { Object.assign(data, patch); dirty = true; status.textContent = 'Saving…'; clearTimeout(timer); timer = setTimeout(saveNow, 600); };
 
@@ -361,10 +469,12 @@ export function openNote(n, defaults = {}, navigate) {
     const drawColors = () => colorRow.replaceChildren(...COLORS.map(([v, l]) => h('button', { type: 'button', role: 'radio', 'aria-checked': String((data.color || '') === v), 'aria-label': l, title: l, class: `cdot nc-${v || 'none'}` + ((data.color || '') === v ? ' on' : ''), onclick: () => { change({ color: v }); drawColors(); dlg.classList.toggle('tinted', !!v); dlg.dataset.color = v; } })));
     drawColors();
     const pinBtn = h('button', { type: 'button', class: 'chip' + (data.pinned ? ' on' : ''), 'aria-pressed': String(!!data.pinned), onclick: () => { change({ pinned: !data.pinned }); pinBtn.classList.toggle('on', data.pinned); pinBtn.setAttribute('aria-pressed', String(data.pinned)); } }, '📌 Pin');
+    const lockBtn = h('button', { type: 'button', class: 'chip' + (data.locked ? ' on' : ''), 'aria-pressed': String(!!data.locked), title: 'Encrypt this note with your private vault',
+      onclick: () => ensureUnlocked(() => { change({ locked: !data.locked }); saveNow(); lockBtn.classList.toggle('on', data.locked); lockBtn.setAttribute('aria-pressed', String(data.locked)); toast(data.locked ? 'Note locked 🔒 Only you can read it' : 'Note unlocked'); }) }, '🔒 Lock');
     organize = h('details', { class: 'note-org', open: !n },
       h('summary', {}, 'Folder, color, link & pin'),
       h('div', { class: 'note-org-grid' }, h('label', {}, h('span', { class: 'field-label' }, 'Folder'), folderSel, newFolderIn), h('label', {}, h('span', { class: 'field-label' }, 'Linked to'), linkSel)),
-      h('div', { class: 'note-org-row' }, colorRow, pinBtn));
+      h('div', { class: 'note-org-row' }, colorRow, h('span', { class: 'chip-row', style: { marginTop: 0 } }, lockBtn, pinBtn)));
   }
 
   // journal extras
@@ -405,7 +515,7 @@ export function openNote(n, defaults = {}, navigate) {
       store.save(TPL, { name, title: data.title || '', body: data.body || '' });
       toast(`Saved template "${name}" ✓`);
     }, 'ghost sm') : null,
-    !journalMode && noteId ? btn('Duplicate', () => { saveNow(); const { id: _x, created: _c, ...copy } = data; store.save(COL, { ...copy, title: `${data.title || 'Note'} (copy)`, edited: ymd(), ts: Date.now() }); toast('Duplicated ✓'); }, 'ghost sm') : null,
+    !journalMode && noteId ? btn('Duplicate', () => { saveNow(); const { id: _x, created: _c, ...copy } = data; writeNote(store.uid(), { ...copy, title: `${data.title || 'Note'} (copy)`, edited: ymd(), ts: Date.now() }).then(() => toast('Duplicated ✓')); }, 'ghost sm') : null,
     btn(navigator.share ? 'Share text' : 'Copy text', copyText, 'ghost sm'),
     delBtn);
 
@@ -424,11 +534,14 @@ export function openNote(n, defaults = {}, navigate) {
 
 // ---- notes list -----------------------------------------------------------------------------
 function noteCard(n, navigate) {
+  if (n._sealed) return h('button', { type: 'button', class: `note note-sealed nc-${n.color || 'none'}`, onclick: () => openNote(n, {}, navigate) },
+    (n.pinned || n.folder) ? h('div', { class: 'note-top' }, n.pinned ? h('span', { class: 'pin' }, '📌 Pinned') : null, n.folder ? h('span', { class: 'note-folder' }, `📁 ${n.folder}`) : null) : null,
+    h('h3', {}, '🔒 Locked note'), h('p', {}, 'Tap to unlock'), h('small', {}, relDay(n.edited || ymd())));
   const cs = checkStats(n.body);
   const tags = tagsOf(n);
   const preview = plain(n.body).replace(/#[A-Za-z][\w-]{0,30}/g, '').trim();
   return h('button', { type: 'button', class: `note nc-${n.color || 'none'}`, onclick: () => openNote(n, {}, navigate) },
-    (n.pinned || n.folder) ? h('div', { class: 'note-top' }, n.pinned ? h('span', { class: 'pin' }, '📌 Pinned') : null, n.folder && !filter.startsWith('folder:') ? h('span', { class: 'note-folder' }, `📁 ${n.folder}`) : null) : null,
+    (n.pinned || n.folder || n.locked) ? h('div', { class: 'note-top' }, n.locked ? h('span', { class: 'pin', title: 'Encrypted' }, '🔒') : null, n.pinned ? h('span', { class: 'pin' }, '📌 Pinned') : null, n.folder && !filter.startsWith('folder:') ? h('span', { class: 'note-folder' }, `📁 ${n.folder}`) : null) : null,
     n.title ? h('h3', {}, n.title) : null,
     preview ? h('p', {}, preview.slice(0, 260)) : null,
     cs.total ? h('div', { class: 'note-checks' }, h('span', {}, `☑ ${cs.done}/${cs.total}`), h('span', { class: 'mini-bar' }, h('i', { style: { width: `${Math.round(100 * cs.done / cs.total)}%` } }))) : null,
@@ -514,7 +627,19 @@ function journalStreak() {
 }
 const excerpt = e => [e.highlight, plain(e.body)].filter(Boolean).join(' · ').replace(/\s+/g, ' ').slice(0, 160);
 
+function journalSecurity() {
+  return h('div', { class: 'jsec' }, journalLocked()
+    ? [h('span', { class: 'muted small' }, '🔒 Your journal is encrypted with your private vault.'), h('button', { type: 'button', class: 'mini-link', onclick: () => { if (confirm('Turn off journal encryption? Entries will be saved as normal (still private to your account).')) setJournalLocked(false); } }, 'Turn off')]
+    : [h('span', { class: 'muted small' }, 'Want extra privacy?'), h('button', { type: 'button', class: 'mini-link', onclick: () => setJournalLocked(true) }, '🔒 Encrypt my journal')]);
+}
+
 function renderJournal(root, ctx) {
+  if (journalLocked() && !vault.isUnlocked()) {
+    root.append(card('🔒 Journal is locked', {},
+      h('p', { class: 'muted' }, 'Your journal is encrypted. Unlock your private vault to read and write entries.'),
+      h('div', { class: 'btn-row' }, btn('Unlock', () => ensureUnlocked(), 'primary'))));
+    return;
+  }
   const today = ymd();
   if (jDate > today) jDate = today;
   const e = entryOn(jDate);
@@ -543,13 +668,13 @@ function renderJournal(root, ctx) {
       mood ? h('p', {}, h('span', { class: `chip on mood-${e.mood}` }, mood)) : null,
       e.highlight ? h('p', {}, h('b', {}, 'Highlight: '), e.highlight) : null,
       e.grateful ? h('p', {}, h('b', {}, 'Grateful for: '), e.grateful) : null,
-      e.body ? renderMd(e.body, i => store.save(COL, { body: toggleLine(e.body, i) }, e.id)) : null));
+      e.body ? renderMd(e.body, i => writeNote(e.id, { ...e, body: toggleLine(e.body, i) })) : null));
   } else {
     root.append(h('section', { class: 'card' },
       h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, jDate === today ? 'Today\'s entry' : longDay(jDate))),
       h('p', { class: 'jprompt-big' }, promptFor(jDate)),
       h('div', { class: 'btn-row' }, btn(jDate === today ? 'Write today\'s entry' : 'Write an entry', write, 'primary'),
-        h('span', { class: 'mood-words' }, MOODS.map(([v, l]) => h('button', { type: 'button', class: `chip mood-${v}`, title: `Just log mood: ${l}`, onclick: () => store.save(COL, { kind: 'journal', date: jDate, mood: v, body: '', edited: ymd(), ts: Date.now() }, journalId(jDate)) }, l)))),
+        h('span', { class: 'mood-words' }, MOODS.map(([v, l]) => h('button', { type: 'button', class: `chip mood-${v}`, title: `Just log mood: ${l}`, onclick: () => writeNote(journalId(jDate), { kind: 'journal', date: jDate, mood: v, body: '', edited: ymd(), ts: Date.now() }) }, l)))),
       h('p', { class: 'hint' }, 'Short on time? Tap a mood to log just that.')));
   }
 
@@ -564,12 +689,14 @@ function renderJournal(root, ctx) {
   const recent = journal().filter(x => x.date !== jDate).slice(0, 8);
   if (recent.length) root.append(card('Recent entries', {}, recent.map(x => h('button', { type: 'button', class: 'row result', onclick: () => go(x.date) },
     h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, relDay(x.date), x.mood ? h('span', { class: `tag mood-t${x.mood}` }, MOODS.find(m => m[0] === x.mood)?.[1]) : null), excerpt(x) ? h('div', { class: 'row-sub' }, excerpt(x)) : null)))));
+  root.append(journalSecurity());
 }
 
 /** Small card for the Today screen. */
 export function todayJournalCard(navigate) {
-  const e = entryOn(ymd());
   const open = () => { tab = 'journal'; jDate = ymd(); navigate('notes'); };
+  if (journalLocked() && !vault.isUnlocked()) return card('Journal', { link: open }, h('p', { class: 'muted' }, '🔒 Locked'), h('div', { class: 'btn-row' }, btn('Unlock', () => ensureUnlocked(), 'ghost sm')));
+  const e = entryOn(ymd());
   return card('Journal', { link: open },
     e ? h('p', { class: 'muted' }, MOODS.find(m => m[0] === e.mood) ? `Mood: ${MOODS.find(m => m[0] === e.mood)[1]}. ` : '', excerpt(e) || 'Written today ✓')
       : [h('p', { class: 'muted' }, promptFor(ymd())), h('div', { class: 'btn-row' }, btn('Write', () => openNote(null, { kind: 'journal', date: ymd(), edit: true }, navigate), 'ghost sm'))]);
@@ -583,16 +710,17 @@ export function render(root, ctx) {
     if (p.get('add')) { tab = 'notes'; const t = p.get('text') || [p.get('title'), p.get('body')].filter(Boolean).join('\n'); setTimeout(() => importNote(t, ctx.navigate, 'shortcut'), 30); }
     else if (p.get('journal')) tab = 'journal';
   }
+  const lockNow = vault.isUnlocked() ? btn('🔓 Lock', () => { vault.lock(); toast('Vault locked 🔒'); }, 'ghost') : null;
   root.append(pageHead('Notes', {
     actions: tab === 'journal'
-      ? [addBtn('Entry', () => openNote(entryOn(jDate), { kind: 'journal', date: jDate, edit: true }, ctx.navigate))]
-      : [btn('Templates', () => chooseTemplate(ctx.navigate), 'ghost'), addBtn('Note', () => openNote(null, {}, ctx.navigate))],
+      ? [lockNow, addBtn('Entry', () => openNote(entryOn(jDate), { kind: 'journal', date: jDate, edit: true }, ctx.navigate))].filter(Boolean)
+      : [lockNow, btn('Templates', () => chooseTemplate(ctx.navigate), 'ghost'), addBtn('Note', () => openNote(null, {}, ctx.navigate))].filter(Boolean),
   }));
   root.append(h('div', { class: 'seg seg-main' }, [['notes', '📝 Notes'], ['journal', '📔 Journal']].map(([v, l]) =>
     h('button', { type: 'button', class: tab === v ? 'on' : '', onclick: () => { tab = v; ctx.rerender(); } }, l))));
   if (tab === 'journal') renderJournal(root, ctx); else renderNotes(root, ctx);
   if (pendingOpen) {
-    const n = store.get(pendingOpen) ? { id: pendingOpen, ...store.get(pendingOpen) } : null;
+    const n = store.get(pendingOpen) ? reveal({ id: pendingOpen, ...store.get(pendingOpen) }) : null;
     pendingOpen = null;
     if (n) setTimeout(() => openNote(n, {}, ctx.navigate), 30);
   }

@@ -17,6 +17,7 @@ const status = {
   state: SUPABASE_URL && SUPABASE_KEY ? 'loading' : 'off', // off | loading | signed-out | syncing | idle | error | offline
   error: null,
   lastSync: store.getMeta('lastSyncAt') || null,
+  needsMfa: false, // signed in with the password, but two-step verification is still owed
 };
 const listeners = new Set();
 let client = null;
@@ -53,6 +54,7 @@ export async function initSync() {
   }
   if (/access_token|error_description|[?&]code=/.test(location.href)) history.replaceState(null, '', location.pathname + '#/today');
   if (session) claimDevice(session.user);
+  if (session) await checkAal();
   if (status.state === 'loading' || session) set({ user: session?.user || null, state: session ? 'idle' : 'signed-out' });
 
   client.auth.onAuthStateChange((event, session) => {
@@ -63,6 +65,8 @@ export async function initSync() {
     set({ user: session?.user || null, state: session ? (['signed-out', 'loading'].includes(status.state) ? 'idle' : status.state) : 'signed-out' });
     // Supabase recommends not calling it again from inside this callback, so wait a tick.
     if (session && session.user.id !== before) setTimeout(syncNow, 0);
+    if (!session) set({ needsMfa: false });
+    else if (['SIGNED_IN', 'TOKEN_REFRESHED', 'MFA_CHALLENGE_VERIFIED', 'USER_UPDATED'].includes(event)) setTimeout(() => checkAal().then(() => syncNow()), 0);
   });
 
   store.subscribe(source => { if (source === 'local') schedule(1500); });
@@ -91,7 +95,7 @@ function claimDevice(user) {
 function schedule(ms) { clearTimeout(timer); timer = setTimeout(syncNow, ms); }
 
 export async function syncNow() {
-  if (!client || !status.user) return;
+  if (!client || !status.user || status.needsMfa) return;
   if (!navigator.onLine) { set({ state: 'offline' }); return; }
   if (busy) { again = true; return; }
   busy = true;
@@ -230,13 +234,14 @@ export async function newInviteCode(hh) {
   await refreshHouseholds(); return code;
 }
 
-export async function signIn(email, password) {
-  const { error } = await client.auth.signInWithPassword({ email, password });
+export async function signIn(email, password, captchaToken) {
+  const { data, error } = await client.auth.signInWithPassword({ email, password, options: captchaToken ? { captchaToken } : undefined });
   if (error) throw error;
+  if (data?.session) await checkAal();
 }
 
-export async function signUp(email, password) {
-  const { data, error } = await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
+export async function signUp(email, password, captchaToken) {
+  const { data, error } = await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname, ...(captchaToken ? { captchaToken } : {}) } });
   if (error) throw error;
   return data; // if email confirmation is on, data.session is null until they confirm
 }
@@ -253,9 +258,48 @@ export async function updatePassword(password) {
   if (error) throw error;
 }
 
-export async function resetPassword(email) {
-  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+export async function resetPassword(email, captchaToken) {
+  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname, ...(captchaToken ? { captchaToken } : {}) });
   if (error) throw error;
+}
+
+// ---- two-step verification (TOTP authenticator app) -------------------------------------------
+/** Is a code still owed for this session? (Password OK, but the account has 2-step turned on.) */
+export async function checkAal() {
+  try {
+    const { data, error } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error) throw error;
+    const need = data.nextLevel === 'aal2' && data.currentLevel !== 'aal2';
+    if (need !== status.needsMfa) set({ needsMfa: need });
+    return need;
+  } catch { return status.needsMfa; }
+}
+export async function mfaFactors() {
+  const { data, error } = await client.auth.mfa.listFactors();
+  if (error) throw error;
+  return data.all || [];
+}
+/** Start setting up an authenticator: returns { id, qr, secret, uri }. */
+export async function mfaEnroll() {
+  for (const f of await mfaFactors()) if (f.status !== 'verified') await client.auth.mfa.unenroll({ factorId: f.id }); // clear half-finished setups
+  const { data, error } = await client.auth.mfa.enroll({ factorType: 'totp', friendlyName: `Authenticator ${new Date().toISOString().slice(0, 16)}`, issuer: 'Everyday' });
+  if (error) throw error;
+  return { id: data.id, qr: data.totp.qr_code, secret: data.totp.secret, uri: data.totp.uri };
+}
+/** Check a 6-digit code (finishes setup, or completes sign-in). */
+export async function mfaVerify(code, factorId) {
+  if (!factorId) factorId = (await mfaFactors()).find(f => f.status === 'verified' && f.factor_type === 'totp')?.id;
+  if (!factorId) throw new Error('No authenticator is set up on this account.');
+  const { error } = await client.auth.mfa.challengeAndVerify({ factorId, code: String(code).replace(/\s/g, '') });
+  if (error) throw new Error(/invalid|expired/i.test(error.message) ? 'That code didn\'t work. Check the time on your phone and try the newest code.' : error.message);
+  await checkAal();
+  syncNow();
+}
+export async function mfaUnenroll(factorId) {
+  const { error } = await client.auth.mfa.unenroll({ factorId });
+  if (error) throw error;
+  await client.auth.refreshSession().catch(() => {});
+  await checkAal();
 }
 
 /** The Supabase client (null until sync has loaded). */

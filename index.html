@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Everyday</title>
+  <!-- Security: only run scripts from this site and the sync library's CDN, only talk to our
+       database, and never allow plugins or <base> tricks. (Turnstile is the optional bot check.) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://rzkcynppocaxgydmsyvu.supabase.co wss://rzkcynppocaxgydmsyvu.supabase.co https://cdn.jsdelivr.net; frame-src https://challenges.cloudflare.com; worker-src 'self'; manifest-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; upgrade-insecure-requests">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="description" content="Tasks, calendar, food, money, habits and notes in one place.">
   <meta name="theme-color" content="#f5f4ef" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)">

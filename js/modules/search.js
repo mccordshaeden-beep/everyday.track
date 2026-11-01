@@ -3,6 +3,7 @@ import * as store from '../store.js';
 import { h, pageHead, empty, icon, relDay } from '../ui.js';
 import { isOn } from './settings.js';
 import { LIBRARY } from '../data/recipes.js';
+import { searchable as notesSearchable } from './notes.js';
 
 export const id = 'search';
 export const title = 'Search';
@@ -14,7 +15,7 @@ let query = '';
 const SOURCES = [
   { col: 'tasks', mod: 'calendar', tab: 'todo', label: t => (t.classId ? 'Assignment' : 'Task'), title: x => x.title, text: x => `${x.title} ${x.notes || ''} ${x.list || ''}`, sub: x => (x.due ? `Due ${relDay(x.due)}` : '') + (x.done ? ' · done' : '') },
   { col: 'events', mod: 'calendar', label: () => 'Event', title: x => x.title, text: x => `${x.title} ${x.location || ''} ${x.notes || ''}`, sub: x => x.date ? relDay(x.date) : '' },
-  { col: 'notes', mod: 'notes', label: x => (x.kind === 'journal' ? 'Journal' : 'Note'), title: x => (x.kind === 'journal' ? `Journal · ${relDay(x.date)}` : x.title || (x.body || '').slice(0, 40)), text: x => `${x.title || ''} ${x.body || ''} ${x.folder || ''} ${x.highlight || ''} ${x.grateful || ''}`, sub: x => (x.kind === 'journal' ? (x.highlight || (x.body || '').slice(0, 60)) : x.folder ? `📁 ${x.folder}` : '') },
+  { col: 'notes', list: () => notesSearchable(), mod: 'notes', label: x => (x.kind === 'journal' ? 'Journal' : 'Note'), title: x => (x.kind === 'journal' ? `Journal · ${relDay(x.date)}` : x.title || (x.body || '').slice(0, 40)), text: x => `${x.title || ''} ${x.body || ''} ${x.folder || ''} ${x.highlight || ''} ${x.grateful || ''}`, sub: x => (x.kind === 'journal' ? (x.highlight || (x.body || '').slice(0, 60)) : x.folder ? `📁 ${x.folder}` : '') },
   { col: 'foods', mod: 'food', tab: 'recipes', label: x => (x.kind === 'snack' ? 'Snack' : 'Recipe'), title: x => x.name, text: x => `${x.name} ${x.ingredients || ''} ${x.notes || ''}` },
   { col: 'pantry', mod: 'food', tab: 'pantry', label: x => x.where || 'Pantry', title: x => x.name, text: x => x.name },
   { col: 'groceries', mod: 'food', tab: 'groceries', label: () => 'Grocery list', title: x => x.name, text: x => `${x.name} ${x.note || ''}`, sub: x => (x.got ? 'in cart' : 'to buy') },
@@ -35,7 +36,7 @@ function results(q) {
   const out = [];
   for (const s of SOURCES) {
     if (!isOn(s.mod)) continue;
-    for (const x of store.list(s.col)) if (hit(s.text(x))) out.push({ s, x });
+    for (const x of (s.list ? s.list() : store.list(s.col))) if (hit(s.text(x))) out.push({ s, x });
   }
   if (isOn('food')) for (const r of LIBRARY) if (hit(`${r.name} ${r.ingredients.join(' ')} ${r.tags.join(' ')}`)) out.push({ s: { mod: 'food', tab: 'recipes', label: () => 'Recipe idea', title: () => r.name }, x: r });
   return out.slice(0, 80);

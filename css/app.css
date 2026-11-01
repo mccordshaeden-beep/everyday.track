@@ -790,3 +790,31 @@ details.guide p { margin-top: 6px; color: var(--muted); font-size: 14.5px; line-
 .jday.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
 .jstats { margin: 4px 0; }
 .tag[class*="mood-t"] { margin-left: 6px; }
+
+/* ---------- security ---------- */
+.lock-screen { position: fixed; inset: 0; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; border: 0; padding: 0; background: var(--bg, #f5f4ef); color: var(--ink); z-index: 1000; }
+.lock-screen::backdrop { background: var(--bg, #f5f4ef); }
+.lock-inner { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 32px 24px calc(32px + env(safe-area-inset-bottom)); text-align: center; }
+.lock-inner img { border-radius: 16px; }
+.lock-inner h1 { font-size: 24px; margin: 0 0 8px; }
+.lock-form { display: flex; flex-direction: column; gap: 10px; width: min(100%, 300px); }
+.lock-pin, .mfa-code { text-align: center; font-size: 26px; letter-spacing: .3em; font-variant-numeric: tabular-nums; }
+.lock-bio { width: min(100%, 300px); }
+.lock-msg { min-height: 1.4em; color: var(--hc-red); font-size: 14px; margin: 0; max-width: 300px; }
+body.privacy #app, body.privacy .tabbar, body.privacy dialog:not(.lock-screen) { visibility: hidden; }
+.sec-block { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line); }
+.sec-block:first-of-type { border-top: 0; padding-top: 0; }
+.sec-block h3 { font-size: 15px; margin: 0; }
+.sec-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.sec-row select { max-width: 100%; flex: 1 1 200px; }
+.qr { display: flex; justify-content: center; padding: 8px; background: #fff; border-radius: 12px; width: fit-content; margin: 0 auto; }
+.check-row { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; }
+.check-row input { margin-top: 3px; width: 18px; height: 18px; flex-shrink: 0; }
+.vault-pw code { font-size: 15px; letter-spacing: .04em; font-weight: 600; }
+.pw-rules { margin: -4px 0 0; padding-left: 18px; font-size: 13px; color: var(--hc-red); }
+.pw-rules:empty { display: none; }
+.pw-rules .good { color: var(--hc-green); list-style: none; margin-left: -18px; }
+.captcha { min-height: 65px; display: flex; justify-content: center; }
+.jsec { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 6px 0 2px; }
+.note-sealed h3 { color: var(--muted); }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }

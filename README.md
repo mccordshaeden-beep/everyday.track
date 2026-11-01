@@ -212,6 +212,29 @@ Notes save as you type and are private to your account.
 
 The first line of the note becomes the title, and Apple checklist and bullet marks are converted.
 
+## Security
+
+- **Row Level Security** on every table: each account can only read its own rows, plus whatever someone deliberately shares with it.
+- **App lock** (Settings → Security, set per device): a 6–12 digit PIN, stored only as a salted PBKDF2 hash, plus optional Face ID / Touch ID through a WebAuthn passkey.
+  - Auto-locks when you leave the app or after a set time, and hides content in the app switcher.
+  - After 5 wrong PINs you have to wait; after 10, the device signs out and wipes its copy.
+- **Two-step login** with an authenticator app (TOTP, via Supabase MFA). The database enforces it: once an account has an authenticator, a restrictive policy on every table and a check in every sharing function need an `aal2` session (password + code). See `supabase/mfa.sql`.
+- **Private vault:** locked notes and the journal (when "Encrypt my journal" is on) are encrypted on the device with AES-256-GCM. The key comes from a random 130-bit vault password (PBKDF2-SHA256, 600k rounds), and the database only stores ciphertext. Each device can remember the key as a non-extractable CryptoKey in IndexedDB. The bank tab works the same way with its own password.
+- **Content Security Policy** (in `index.html`): scripts can load only from this site, jsDelivr (supabase-js) and Cloudflare Turnstile, and the app only connects to this Supabase project. Plugins and `<base>` tricks are blocked, and a frame-buster stops the app being embedded on other sites.
+- **Sign-up rules:** passwords need 12+ characters, can't be a common password, and can't contain your email name.
+- **Sign out if unused:** an optional per-device timer (1, 7 or 30 days).
+
+**Two dashboard settings to finish (2 minutes):**
+1. In Supabase, go to **Authentication → Sign In / Providers → Email** and set the **minimum password length to 12**. The app already enforces this, and this setting makes the server enforce it too.
+2. Optional bot protection (Cloudflare Turnstile, free):
+   1. Create a Turnstile widget at dash.cloudflare.com → Turnstile for `mccordshaeden-beep.github.io`.
+   2. Put the **site key** in `js/config.js` → `TURNSTILE_SITE_KEY`.
+   3. In Supabase, go to **Authentication → Attack Protection → Enable CAPTCHA protection**, choose Turnstile, and paste the **secret key**.
+
+   Do steps 2 and 3 together. If the server requires CAPTCHA but the app doesn't show it, sign-in fails.
+
+**Lost your authenticator?** The app owner can remove it in the Supabase dashboard (Authentication → Users → the user → MFA factors). Adding a second authenticator ahead of time avoids this.
+
 ## Sharing
 
 You can share with another Everyday user by their account email, which creates a private space for the two of you, or with your household:
