@@ -881,3 +881,31 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .act-actions { margin: 4px 0 2px; }
 .act-sum { margin: 2px 0 6px; }
 .hero-setup .steps li { margin-bottom: 2px; }
+
+/* ---------- food: compact ---------- */
+.meal-totals { margin: 0 0 4px; font-size: 15px; color: var(--muted); }
+.meal-totals b { color: var(--ink); font-size: 17px; }
+.meal-slot { border-top: 1px solid var(--line); padding: 8px 0 6px; }
+.meal-slot:first-of-type { margin-top: 10px; }
+.meal-slot-head { display: flex; justify-content: space-between; align-items: center; }
+.meal-slot-head .slot { font-weight: 650; font-size: 14px; color: var(--muted); text-transform: none; }
+.meal-slot-head .icon-btn { width: 34px; height: 34px; }
+.meal-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; border: 0; background: none; font: inherit; color: inherit; padding: 4px 0; cursor: pointer; }
+.meal-item.planned { color: var(--muted); }
+.week-row { display: grid; grid-template-columns: 40px 1fr 36px; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.week-row:first-of-type { border-top: 0; }
+.week-row.today .week-day { color: var(--accent); font-weight: 750; }
+.week-day { font-weight: 600; font-size: 14px; }
+.week-items { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.plan-chip { display: inline-flex; align-items: center; gap: 2px; padding: 3px 4px 3px 10px; border-radius: 99px; background: var(--field); font-size: 13px; cursor: pointer; max-width: 100%; }
+.plan-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-chip .x { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.week-row .icon-btn { width: 34px; height: 34px; }
+.recipe-group > summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; list-style: none; }
+.recipe-group > summary::-webkit-details-marker { display: none; }
+.recipe-group > summary::after { content: '▾'; color: var(--muted); margin-left: 8px; transition: transform .15s; }
+.recipe-group:not([open]) > summary::after { transform: rotate(-90deg); }
+.recipe-group[open] > summary { margin-bottom: 6px; }
+.recipe-group > summary .muted { margin-left: auto; }
+.section-title { font-size: 17px; margin: 18px 2px 8px; }
+.diet-line { margin: 4px 2px; }

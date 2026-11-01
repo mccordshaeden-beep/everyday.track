@@ -218,6 +218,13 @@ Notes save as you type and are private to your account.
 
 The first line of the note becomes the title, and Apple checklist and bullet marks are converted.
 
+## Food tab
+
+The Food tab has three sections:
+- **Meals:** today's meals by slot with calories and protein, plus this week's meal plan. Tap + on a day to plan it, and "Add missing ingredients to groceries" fills your list.
+- **Recipes:** one searchable list with filter chips (All / Mine / Can make now / Snacks). Search also offers an online search, 🔗 imports a recipe from a link, and + adds your own.
+- **Shopping:** the grocery list (shareable), with what you have at home (pantry) underneath. "Put away" moves bought items into the pantry.
+
 ## Money tab: Safe to spend
 
 Everything is built around one number:

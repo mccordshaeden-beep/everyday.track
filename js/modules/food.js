@@ -25,14 +25,17 @@ const GOALS_ID = 'settings:food'; // { calories, protein, diet, allergies: [], a
 const SLOTS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
 const PLACES = ['Fridge', 'Freezer', 'Pantry', 'Spices'];
 
-let tab = 'log';
+// Three tabs: Meals (today + this week's plan) · Recipes (one list) · Shopping (groceries + pantry).
+let tab = 'meals';
 let day = ymd();
-let recipeView = 'ideas';
+let recipeView = 'all';   // all | mine | make | snacks
+let recipeQuery = '';
 let showHidden = false;
 let findQuery = '';
 let findResults = null; // null = not searched yet
 let week = mondayOf(ymd());
-export function setTab(t) { tab = t; }
+const OLD_FOOD_TABS = { log: 'meals', plan: 'meals', pantry: 'shopping', groceries: 'shopping' };
+export function setTab(t) { tab = OLD_FOOD_TABS[t] || (['meals', 'recipes', 'shopping'].includes(t) ? t : 'meals'); }
 
 // ==== ingredient matching ========================================================
 // "1 lb ground beef" → key "beef"; "2 cups shredded cheese" → "cheese".
@@ -204,51 +207,67 @@ function recipeRow(r, pk) {
 }
 
 function renderRecipes(root) {
-  root.append(seg([['ideas', 'Ideas'], ['find', 'Find more'], ['mine', 'My recipes'], ['make', 'Can I make?'], ['snacks', 'Snacks']], recipeView, v => { recipeView = v; showHidden = false; reRender(); }));
   const pk = pantryKeys();
   const prefs = foodPrefs();
-  if (goalNow() !== 'maintain') root.append(h('div', { class: 'diet-bar' },
-    h('span', { class: 'muted' }, goalNow() === 'bulk' ? '💪 Bulking: higher-calorie, high-protein recipes are shown first' : '🔥 Shredding: lower-calorie, high-protein recipes are shown first'),
-    h('a', { class: 'btn ghost sm', href: '#/workouts' }, 'Change goal')));
-  // Only show diet info for people who've set restrictions (the ⚙ button at the top opens Food settings).
-  if (dietIsSet(prefs)) root.append(h('div', { class: 'diet-bar' },
-    h('span', { class: 'muted' }, '🍽 ' + dietSummary(prefs)),
-    btn('Change', editFoodSettings, 'ghost sm')));
+  const q = recipeQuery.trim().toLowerCase();
+  // search box (searches your recipes and ideas; online search is one tap further)
+  const input = h('input', { type: 'search', placeholder: 'Search recipes or an ingredient…', value: recipeQuery, 'data-fk': 'recipe-q', enterkeyhint: 'search', 'aria-label': 'Search recipes',
+    oninput: e => { recipeQuery = e.target.value; reRender(); } });
+  root.append(h('form', { class: 'quick', onsubmit: e => { e.preventDefault(); if (recipeQuery.trim().length >= 2) doSearch(recipeQuery.trim()); } }, input,
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Import a recipe from a link', title: 'Import from a link', onclick: importFromLink }, '🔗'),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'New recipe', title: 'New recipe', onclick: () => editRecipe(null) }, icon('plus', 20))));
+  root.append(h('div', { class: 'chip-row' },
+    [['all', 'All'], ['mine', `Mine${myRecipes().length ? ` (${myRecipes().length})` : ''}`], ['make', 'Can make now'], ['snacks', 'Snacks']].map(([v, l]) =>
+      h('button', { type: 'button', class: 'chip' + (recipeView === v ? ' on' : ''), onclick: () => { recipeView = v; showHidden = false; reRender(); } }, l))));
+  const bars = [];
+  if (goalNow() !== 'maintain') bars.push(goalNow() === 'bulk' ? '💪 Bulking: higher-calorie picks first' : '🔥 Shredding: lighter, high-protein picks first');
+  if (dietIsSet(prefs)) bars.push('🍽 ' + dietSummary(prefs));
+  if (bars.length) root.append(h('p', { class: 'muted small diet-line' }, bars.join(' · '), ' ', h('button', { type: 'button', class: 'mini-link', onclick: editFoodSettings }, 'Change')));
 
-  if (recipeView === 'mine') {
-    const list = myRecipes().sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name));
-    root.append(card('My recipes', { action: addBtn('New', () => editRecipe(null)) },
-      list.length ? list.map(r => recipeRow(r, pk)) : empty('Save recipes from Ideas, or add your own with the New button.')));
-  } else if (recipeView === 'find') {
-    renderFind(root, pk);
-  } else if (recipeView === 'ideas') {
-    const types = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
-    const all = ideas();
-    const hidden = all.filter(r => !fits(r));
-    const list = showHidden ? all : all.filter(fits);
-    if (hidden.length) root.append(h('div', { class: 'diet-bar' },
-      h('span', { class: 'muted' }, `${plural(hidden.length, 'idea')} hidden because of your food settings`),
-      btn(showHidden ? 'Hide them' : 'Show them', () => { showHidden = !showHidden; reRender(); }, 'ghost sm')));
-    root.append(h('div', { class: 'stack' }, types.map(t => {
-      const group = list.filter(r => r.type === t).sort(goalSort);
-      return group.length ? card(t === 'Snack' ? 'Snacks' : t, {}, group.map(r => recipeRow(r, pk))) : null;
-    })));
-  } else if (recipeView === 'make') {
-    if (!pk.length) { root.append(card('Fill your pantry first', {}, h('p', { class: 'muted' }, 'Add what you have in the Pantry tab, and this will show which recipes you can make right now and which only need a couple of things.'), h('div', { class: 'btn-row' }, btn('Go to Pantry', () => { tab = 'pantry'; reRender(); }, 'primary')))); return; }
-    const scored = allRecipes().filter(fits).map(r => ({ r, miss: missingFor(r, pk) })).sort((a, b) => a.miss.length - b.miss.length);
+  const matchQ = r => !q || `${r.name} ${lines(r.ingredients).join(' ')} ${(r.tags || []).join(' ')} ${r.type || ''}`.toLowerCase().includes(q);
+
+  if (recipeView === 'snacks') {
+    const list = snacks().filter(matchQ).sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name));
+    root.append(card('Snacks I like', { action: addBtn('Add', () => editSnack(null)) },
+      list.length ? list.map(snackRow) : empty('Save snacks you like so they\'re easy to log and restock.')));
+    return;
+  }
+  if (recipeView === 'make') {
+    if (!pk.length) { root.append(card('What can I make?', {}, h('p', { class: 'muted' }, 'Add what\'s in your fridge and cupboards (Shopping → At home), and this shows what you can cook right now.'), h('div', { class: 'btn-row' }, btn('Add what I have', () => { tab = 'shopping'; reRender(); }, 'primary')))); return; }
+    const scored = allRecipes().filter(fits).filter(matchQ).map(r => ({ r, miss: missingFor(r, pk) })).sort((a, b) => a.miss.length - b.miss.length);
     const ready = scored.filter(x => !x.miss.length);
     const close = scored.filter(x => x.miss.length > 0 && x.miss.length <= 2);
-    root.append(card('Ready to cook', {}, ready.length ? ready.map(x => recipeRow(x.r, pk)) : empty('Nothing complete yet. See below for what\'s close.')));
-    root.append(card('Need just 1–2 things', {}, close.length ? close.map(x => h('div', { class: 'row' },
-      h('div', { class: 'row-main', onclick: () => openRecipe(x.r) },
-        h('div', { class: 'row-title' }, x.r.name),
-        h('div', { class: 'row-sub' }, 'Need: ' + x.miss.map(ingName).join(', '))),
-      btn('+ List', () => addMissing(x.r), 'ghost sm'))) : empty('Nothing close. Try adding more to your pantry.')));
-  } else {
-    const list = snacks().sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name));
-    root.append(card('Snacks I like', { action: addBtn('Add', () => editSnack(null)) },
-      list.length ? list.map(snackRow) : empty('Save snacks you like so they are easy to log and restock.')));
+    root.append(card('Ready to cook', {}, ready.length ? ready.map(x => recipeRow(x.r, pk)) : empty('Nothing complete yet. See what\'s close below.')));
+    if (close.length) root.append(card('Need just 1–2 things', {}, close.map(x => h('div', { class: 'row' },
+      h('div', { class: 'row-main', onclick: () => openRecipe(x.r) }, h('div', { class: 'row-title' }, x.r.name), h('div', { class: 'row-sub' }, 'Need: ' + x.miss.map(ingName).join(', '))),
+      btn('+ List', () => addMissing(x.r), 'ghost sm')))));
+    return;
   }
+  // All / Mine
+  const mine = myRecipes().filter(matchQ).sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name));
+  if (recipeView === 'mine') {
+    root.append(card('My recipes', { action: addBtn('New', () => editRecipe(null)) },
+      mine.length ? mine.map(r => recipeRow(r, pk)) : empty(q ? 'None of your recipes match.' : 'Save recipes from All, or add your own with New.')));
+  } else {
+    if (mine.length) root.append(card('My recipes', {}, mine.slice(0, q ? 50 : 5).map(r => recipeRow(r, pk)),
+      !q && mine.length > 5 ? h('button', { type: 'button', class: 'mini-link', onclick: () => { recipeView = 'mine'; reRender(); } }, `See all ${mine.length} ›`) : null));
+    const all = ideas().filter(matchQ);
+    const hidden = all.filter(r => !fits(r));
+    const list = (showHidden ? all : all.filter(fits)).sort(goalSort);
+    if (hidden.length) root.append(h('p', { class: 'muted small diet-line' }, `${plural(hidden.length, 'idea')} hidden by your food settings. `,
+      h('button', { type: 'button', class: 'mini-link', onclick: () => { showHidden = !showHidden; reRender(); } }, showHidden ? 'Hide them' : 'Show')));
+    const types = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
+    if (q) root.append(card(`Ideas matching "${recipeQuery.trim()}"`, {}, list.length ? list.map(r => recipeRow(r, pk)) : empty('No ideas match.')));
+    else root.append(h('div', { class: 'stack' }, types.map(t => {
+      const group = list.filter(r => r.type === t);
+      return group.length ? h('details', { class: 'card recipe-group', open: t === guessSlot().replace('Snacks', 'Snack') },
+        h('summary', {}, h('span', { class: 'card-title' }, t === 'Snack' ? 'Snacks' : t), h('span', { class: 'muted small' }, `${group.length} ideas`)),
+        group.map(r => recipeRow(r, pk))) : null;
+    })));
+  }
+  // online search (results from the recipe database)
+  if (q.length >= 2 && findResults === null) root.append(h('div', { class: 'btn-row' }, btn(`🔎 Search online for "${recipeQuery.trim()}"`, () => doSearch(recipeQuery.trim()), 'ghost sm')));
+  if (findResults !== null) renderFind(root, pk);
 }
 
 // ==== find more recipes (online) ============================================================
@@ -296,27 +315,15 @@ function importFromLink() {
 }
 
 function renderFind(root, pk) {
-  if (!getStatus().user) { root.append(empty('Sign in to search for more recipes.')); return; }
-  const input = h('input', { type: 'search', placeholder: 'Search recipes: "pasta", "chicken", "curry"…', value: findQuery, 'data-fk': 'recipe-find', enterkeyhint: 'search', 'aria-label': 'Search recipes' });
-  root.append(h('form', { class: 'quick', onsubmit: e => { e.preventDefault(); const q = input.value.trim(); if (q.length >= 2) doSearch(q); } },
-    input, h('button', { type: 'submit', class: 'icon-btn solid', 'aria-label': 'Search' }, icon('search', 20))));
-
-  root.append(h('div', { class: 'find-links' },
-    btn('🔗 Import from a link', importFromLink, 'ghost sm'),
-    findQuery ? h('a', { class: 'btn ghost sm', href: `https://www.google.com/search?q=${encodeURIComponent(findQuery + ' recipe')}`, target: '_blank', rel: 'noopener' }, `Search the web for "${findQuery}" ↗`) : null));
-
-  if (findResults === null) {
-    root.append(card('Find more recipes', {},
-      h('p', { class: 'muted' }, 'Search a free recipe database by dish or main ingredient. Or find a recipe anywhere online, copy its link, and tap "Import from a link".'),
-      h('div', { class: 'chip-row' }, ['Chicken', 'Pasta', 'Beef', 'Vegetarian', 'Breakfast', 'Seafood', 'Dessert', 'Soup'].map(q => btn(q, () => doSearch(q), 'chip-btn')))));
-    return;
-  }
+  if (!getStatus().user) { root.append(empty('Sign in to search online for more recipes.')); return; }
+  if (findResults === null) return;
   if (findResults === 'loading') { root.append(empty('Searching…')); return; }
   if (findResults.error) { root.append(empty(findResults.error)); return; }
   const ok = findResults.filter(fits), hid = findResults.length - ok.length;
   const list = showHidden ? findResults : ok;
-  root.append(card(`${plural(findResults.length, 'result')} for "${findQuery}"`, {
-    action: hid ? btn(showHidden ? 'Hide unsafe' : `Show ${hid} hidden`, () => { showHidden = !showHidden; reRender(); }, 'ghost sm') : null,
+  root.append(card(`Online: ${plural(findResults.length, 'result')} for "${findQuery}"`, {
+    action: h('span', { class: 'btn-row tight' }, hid ? btn(showHidden ? 'Hide unsafe' : `Show ${hid} hidden`, () => { showHidden = !showHidden; reRender(); }, 'ghost sm') : null,
+      btn('✕', () => { findResults = null; reRender(); }, 'ghost sm')),
   }, list.length ? list.map(r => h('div', { class: 'row', onclick: () => openRecipe(r) },
     r.image ? h('img', { class: 'thumb', src: r.image + '/preview', alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : null,
     h('div', { class: 'row-main' },
@@ -325,7 +332,8 @@ function renderFind(root, pk) {
       h('div', { class: 'row-meta' }, warnTag(r), pk.length ? h('span', { class: 'tag' }, `Need ${missingFor(r, pk).length}`) : null)),
     icon('right', 18)))
     : empty(findResults.length ? 'All results were hidden by your food settings.' : 'No recipes found. Try a simpler word like "chicken" or "soup".')));
-  root.append(h('p', { class: 'hint' }, 'Recipe search by TheMealDB. Calories aren\'t included for these, so you can add them when you save.'));
+  root.append(h('p', { class: 'hint' }, 'Online recipes from TheMealDB. Calories aren\'t included, so you can add them when you save. ',
+    h('a', { href: `https://www.google.com/search?q=${encodeURIComponent(findQuery + ' recipe')}`, target: '_blank', rel: 'noopener' }, 'Search the web ↗')));
 }
 
 // ==== snacks ===========================================================================
@@ -422,27 +430,30 @@ export function mealsSummary(d) {
   return out;
 }
 
-function renderLog(root) {
+function renderMeals(root) {
   root.append(dayNav(day, d => { day = d; reRender(); }));
-  root.append(card(day === ymd() ? 'Today' : fmtDay(day), { action: btn('Targets', editFoodSettings, 'ghost sm') }, totalsBlock(day),
-    h('p', { class: 'hint' }, 'Calories and protein from recipes are rough estimates.')));
   const entries = mealsOn(day);
   const planned = store.list(PLAN).filter(p => p.date === day);
-  const wrap = h('div', { class: 'grid' });
-  for (const slot of SLOTS) {
+  const t = dayTotals(day), g = foodGoals();
+  const slotRow = slot => {
     const list = entries.filter(e => e.slot === slot).sort((a, b) => (a.created || '').localeCompare(b.created || ''));
     const plan = planned.filter(p => p.slot === slot && !list.some(e => e.recipe && e.recipe === p.recipe));
-    wrap.append(card(slot, { action: h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Add ${slot}`, onclick: () => editLog(null, { slot, date: day }) }, icon('plus', 20)) },
-      list.map(e => h('div', { class: 'row', onclick: () => editLog(e) },
-        h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, e.name),
-          (e.calories || e.protein) ? h('div', { class: 'row-sub' }, [e.calories ? `${e.calories} cal` : '', e.protein ? `${e.protein} g protein` : ''].filter(Boolean).join(' · ')) : null))),
-      plan.map(p => h('div', { class: 'row planned' },
-        h('div', { class: 'row-main', onclick: () => { const r = getRecipe(p.recipe); if (r) openRecipe(r); } },
-          h('div', { class: 'row-title' }, p.name), h('div', { class: 'row-sub' }, 'Planned')),
-        btn('Ate it', () => { const r = getRecipe(p.recipe); if (r) logRecipe(r, day, slot); else store.save(LOG, { name: p.name, slot, date: day }); }, 'ghost sm'))),
-      !list.length && !plan.length ? empty('—') : null));
-  }
-  root.append(wrap);
+    return h('div', { class: 'meal-slot' },
+      h('div', { class: 'meal-slot-head' }, h('span', { class: 'slot' }, slot),
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Add ${slot}`, onclick: () => editLog(null, { slot, date: day }) }, icon('plus', 18))),
+      list.map(e => h('button', { type: 'button', class: 'meal-item', onclick: () => editLog(e) }, e.name,
+        e.calories ? h('small', { class: 'muted' }, ` ${e.calories} cal`) : null)),
+      plan.map(p => h('div', { class: 'meal-item planned' },
+        h('span', { onclick: () => { const r = getRecipe(p.recipe); if (r) openRecipe(r); } }, p.name, h('small', { class: 'muted' }, ' · planned')),
+        btn('Ate it', () => { const r = getRecipe(p.recipe); if (r) logRecipe(r, day, slot); else store.save(LOG, { name: p.name, slot, date: day }); }, 'ghost sm'))));
+  };
+  root.append(card(day === ymd() ? 'Today' : fmtDay(day), { action: btn('Targets', editFoodSettings, 'ghost sm') },
+    h('p', { class: 'meal-totals' },
+      h('b', {}, Math.round(t.calories).toLocaleString()), g.calories ? ` / ${Number(g.calories).toLocaleString()}` : '', ' cal · ',
+      h('b', {}, Math.round(t.protein)), g.protein ? ` / ${g.protein}` : '', ' g protein'),
+    g.calories ? bar(t.calories, g.calories, 'thin neutral') : null,
+    SLOTS.map(slotRow)));
+  renderWeek(root);
 }
 
 // ==== weekly meal plan ===================================================================
@@ -495,40 +506,33 @@ function weekMissing() {
   return [...need.values()];
 }
 
-function renderPlan(root) {
-  const label = `${fmtDay(week, { month: 'short', day: 'numeric' })} – ${fmtDay(addDays(week, 6), { month: 'short', day: 'numeric' })}`;
-  root.append(h('div', { class: 'daynav' },
-    iconBtn('left', () => { week = addDays(week, -7); reRender(); }, 'Previous week'),
-    h('button', { type: 'button', class: 'daynav-label', onclick: () => { week = mondayOf(ymd()); reRender(); } }, week === mondayOf(ymd()) ? 'This week' : label),
-    iconBtn('right', () => { week = addDays(week, 7); reRender(); }, 'Next week')));
-
-  const miss = weekMissing();
-  root.append(card('Shopping for this plan', {},
-    h('p', { class: 'muted' }, miss.length ? `${plural(miss.length, 'ingredient')} you don't have yet: ${miss.slice(0, 8).map(m => ingName(m.line)).join(', ')}${miss.length > 8 ? '…' : ''}` : 'Plan meals below. Anything you don\'t have in your pantry can go straight to your grocery list.'),
-    miss.length ? h('div', { class: 'btn-row' }, btn(`Add ${miss.length} to grocery list`, () => {
-      const n = addGroceries(miss.map(m => ({ line: m.line, note: 'for ' + [...m.recipes].join(', ') })));
-      toast(n ? `Added ${plural(n, 'item')} to groceries` : 'Already on your list');
-    }, 'primary')) : null));
-
+function renderWeek(root) {
   const plans = store.list(PLAN);
-  const grid = h('div', { class: 'grid' });
-  for (let i = 0; i < 7; i++) {
-    const d = addDays(week, i);
+  const miss = weekMissing();
+  const label = week === mondayOf(ymd()) ? 'This week' : `${fmtDay(week, { month: 'short', day: 'numeric' })} – ${fmtDay(addDays(week, 6), { month: 'short', day: 'numeric' })}`;
+  root.append(card('Meal plan', {
+    action: h('span', { class: 'btn-row tight' },
+      iconBtn('left', () => { week = addDays(week, -7); reRender(); }, 'Previous week'),
+      h('button', { type: 'button', class: 'mini-link', onclick: () => { week = mondayOf(ymd()); reRender(); } }, label),
+      iconBtn('right', () => { week = addDays(week, 7); reRender(); }, 'Next week')),
+  },
+  Array.from({ length: 7 }, (_, i) => addDays(week, i)).map(d => {
     const list = plans.filter(p => p.date === d).sort((a, b) => SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot));
-    grid.append(card(`${parseYmd(d).toLocaleDateString(undefined, { weekday: 'long' })}${d === ymd() ? ' · Today' : ''}`, {
-      cls: d === ymd() ? 'today-card' : '',
-      action: h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Plan ${fmtDay(d)}`, onclick: () => pickForDay(d) }, icon('plus', 20)),
-    },
-    list.length ? list.map(p => h('div', { class: 'row' },
-      h('span', { class: 'slot' }, p.slot),
-      h('div', { class: 'row-main', onclick: () => { const r = getRecipe(p.recipe); if (r) openRecipe(r); } }, h('div', { class: 'row-title' }, p.name)),
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove from plan', onclick: () => store.remove(p.id) }, icon('trash', 18))))
-      : empty(fmtDay(d, { month: 'short', day: 'numeric' }) + ': nothing planned')));
-  }
-  root.append(grid);
+    return h('div', { class: 'week-row' + (d === ymd() ? ' today' : '') },
+      h('span', { class: 'week-day' }, parseYmd(d).toLocaleDateString(undefined, { weekday: 'short' })),
+      h('div', { class: 'week-items' }, list.length ? list.map(p => h('span', { class: 'plan-chip' },
+        h('span', { onclick: () => { const r = getRecipe(p.recipe); if (r) openRecipe(r); } }, p.name),
+        h('button', { type: 'button', class: 'x', 'aria-label': `Remove ${p.name}`, onclick: () => store.remove(p.id) }, '×'))) : h('span', { class: 'muted small' }, '—')),
+      h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Plan ${fmtDay(d)}`, onclick: () => pickForDay(d) }, icon('plus', 18)));
+  }),
+  miss.length ? h('div', { class: 'btn-row' }, btn(`🛒 Add ${plural(miss.length, 'missing ingredient')} to groceries`, () => {
+    const n = addGroceries(miss.map(m => ({ line: m.line, note: 'for ' + [...m.recipes].join(', ') })));
+    toast(n ? `Added ${plural(n, 'item')} to groceries` : 'Already on your list');
+  }, 'ghost sm')) : null));
 }
 
 // ==== pantry / fridge =======================================================================
+const pantryOpen = new Set(['Fridge']);
 function editPantry(p) {
   openForm({
     title: p ? p.name : 'Add to pantry',
@@ -557,6 +561,7 @@ function pantryRow(p) {
 }
 
 function renderPantry(root) {
+  root.append(h('h2', { class: 'section-title' }, 'At home', h('small', { class: 'muted' }, ' · what you already have, so recipes and lists know')));
   const input = h('input', { type: 'text', placeholder: 'Add what you have… (commas add several)', 'data-fk': 'pantry-quick', enterkeyhint: 'done', 'aria-label': 'Pantry item' });
   const where = h('select', { 'aria-label': 'Where' }, PLACES.map(p => h('option', {}, p)));
   root.append(h('form', {
@@ -573,12 +578,14 @@ function renderPantry(root) {
 
   const all = store.list(PANTRY).sort((a, b) => a.name.localeCompare(b.name));
   if (!all.length) { root.append(empty('Add what\'s in your fridge, freezer and cupboards. Then recipes show what you can make, and the shopping list skips what you already have.')); return; }
+  const open = pantryOpen;
   const soon = all.filter(p => p.expires && daysBetween(ymd(), p.expires) <= 3).sort((a, b) => a.expires.localeCompare(b.expires));
   const wrap = h('div', { class: 'grid' });
   if (soon.length) wrap.append(card('Use soon', { cls: 'warn' }, soon.map(pantryRow)));
   for (const place of PLACES) {
     const list = all.filter(p => (p.where || 'Pantry') === place);
-    if (list.length) wrap.append(card(`${place} (${list.length})`, {}, list.map(pantryRow)));
+    if (list.length) wrap.append(h('details', { class: 'card recipe-group', open: open.has(place), ontoggle: e => { e.target.open ? open.add(place) : open.delete(place); } },
+      h('summary', {}, h('span', { class: 'card-title' }, place), h('span', { class: 'muted small' }, `${list.length} item${list.length === 1 ? '' : 's'}`)), list.map(pantryRow)));
   }
   root.append(wrap);
 }
@@ -683,11 +690,8 @@ export function render(root, ctx) {
   reRender = ctx.rerender;
   root.append(pageHead('Food', { actions: [iconBtn('settings', editFoodSettings, 'Food settings: allergies, diet, targets'), addBtn('Log', () => editLog(null))] }));
   const gc = groceryCount();
-  root.append(seg([['log', 'Ate'], ['plan', 'Plan'], ['recipes', 'Recipes'], ['pantry', 'Pantry'], ['groceries', `Groceries${gc ? ` (${gc})` : ''}`]],
-    tab, v => { tab = v; reRender(); }));
-  if (tab === 'log') renderLog(root);
-  else if (tab === 'plan') renderPlan(root);
-  else if (tab === 'recipes') renderRecipes(root);
-  else if (tab === 'pantry') renderPantry(root);
-  else renderGroceries(root);
+  root.append(seg([['meals', 'Meals'], ['recipes', 'Recipes'], ['shopping', `Shopping${gc ? ` (${gc})` : ''}`]], tab, v => { tab = v; reRender(); }));
+  if (tab === 'recipes') renderRecipes(root);
+  else if (tab === 'shopping') { renderGroceries(root); renderPantry(root); }
+  else renderMeals(root);
 }
