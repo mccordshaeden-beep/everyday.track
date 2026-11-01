@@ -857,3 +857,27 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .flags li.bad, .flags li.warn, .flags li.good { color: var(--ink); }
 .warn-box { background: color-mix(in srgb, var(--hc-yellow) 16%, var(--card)); border-left: 4px solid var(--hc-yellow); padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.45; margin: 0; }
 .err-detail { display: block; font-size: 12px; background: var(--field); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* ---------- money: safe to spend ---------- */
+.hero { display: flex; flex-direction: column; gap: 4px; }
+.hero .eyebrow { margin: 0; }
+.hero-num { font-size: 44px; font-weight: 750; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.hero.good .hero-num { color: var(--hc-green); } .hero.over .hero-num { color: var(--hc-red); }
+.hero-sub { margin: 0 0 6px; color: var(--muted); font-size: 15px; }
+.hero-facts { margin: 6px 0 10px; }
+.hero-facts dt:last-of-type, .hero-facts dd:last-of-type { font-weight: 700; border-top: 1px solid var(--line); padding-top: 6px; }
+.hero-facts dd.ok { color: var(--hc-green); } .hero-facts dd.bad { color: var(--hc-red); }
+.money-sum .big.ok { color: var(--hc-green); } .money-sum .big.bad { color: var(--hc-red); }
+.plan-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; padding: 12px 0; border: 0; border-bottom: 1px solid var(--line); background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.plan-row > span:first-child { display: flex; flex-direction: column; gap: 2px; }
+.plan-val { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-total { display: flex; justify-content: space-between; align-items: center; padding: 12px 0 2px; font-size: 16px; }
+.plan-total b { font-size: 19px; } .plan-total b.ok { color: var(--hc-green); } .plan-total b.bad { color: var(--hc-red); }
+.grow-details { margin-top: 14px; }
+.grow-details > summary { cursor: pointer; font-weight: 650; padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); list-style: none; }
+.grow-details[open] > summary { margin-bottom: 12px; }
+.grow-details > .card + .card { margin-top: 12px; }
+.warn-card { border-color: var(--hc-yellow); background: color-mix(in srgb, var(--hc-yellow) 8%, var(--card)); }
+.act-actions { margin: 4px 0 2px; }
+.act-sum { margin: 2px 0 6px; }
+.hero-setup .steps li { margin-bottom: 2px; }

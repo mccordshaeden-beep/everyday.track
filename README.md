@@ -169,7 +169,9 @@ How it works: the app writes the next 10 days of reminders into the `reminders` 
 
 School → **Paste Canvas link**. In Canvas: Calendar → "Calendar Feed" → copy. The `canvas-feed` Edge Function downloads it (browsers can't fetch Canvas directly). Assignments become School assignments (classes are created automatically from the course code), other Canvas calendar items go into Calendar. It refreshes every 6 hours when you open the app, and never undoes what you've checked off, graded or deleted.
 
-## Bank tab (QFX/OFX/QBO or CSV import, encrypted)
+## Bank imports (QFX/OFX/QBO, CSV or PDF)
+
+Bank imports no longer have a separate password. They're saved like any other spending, private to your account, and show up in Money → Activity. Data from the old password vault is moved over after one last unlock (or can be deleted and re-imported).
 
 Quicken (.qfx), Microsoft Money (.ofx) and QuickBooks (.qbo) files are read directly; they're the most reliable format, and the bank's own transaction ids (FITID) prevent duplicates when date ranges overlap. Only date, payee/memo, amount and the bank's name are kept; account and routing numbers are ignored.
 
@@ -217,14 +219,22 @@ Notes save as you type and are private to your account.
 
 The first line of the note becomes the title, and Apple checklist and bullet marks are converted.
 
-## Money tab: Grow and Insights
+## Money tab: Safe to spend
 
-- **Budget tab:** shows Income, Left over and Savings rate. Left over is income minus spending, subscriptions, and bills still due this month. Category bars turn amber at 80% and red when you're over. "+ Category" adds a category quickly.
-- **Goals tab:** goals can be added to or withdrawn from.
-- **Grow tab:** a compound-growth planner comparing checking (0%), high-yield savings (~4%) and an index fund (~7%). The rates are editable assumptions. "Use my monthly leftover" fills in your real leftover, and there's a "common order for extra money" guide. This is general education, not advice.
-- **Insights tab:** a donut chart of spending by category, plus heads-up flags: over budget, at 80%, spending faster than the month is passing, up 25%+ from last month, budgets bigger than income, a low savings rate, subscriptions taking 10%+ of income, and money left to move into a goal.
+Everything is built around one number:
 
-These were adapted from a standalone "Money Planner" module. They use the app's own synced storage instead of its separate tables, so they're covered by the same sync, two-step login and security rules.
+**Safe to spend** = income − bills & subscriptions − savings − everyday spending so far.
+
+- **Income:** your planned take-home pay, or what actually came in if that's more.
+- **Bills & subscriptions:** your list, or what was really paid if that's more. So nothing counts twice, and nothing is missed.
+- **Savings:** your monthly amount, or what you logged with the category "Savings" if that's more.
+
+The app also shows it per day for the rest of the month and for the rest of this week.
+
+The tab has three sections:
+- **This month:** the number and how it's worked out, bills and subscriptions due in the next 2 weeks, everyday spending against category limits, heads-up tips, and spending over the last 6 months.
+- **Activity:** every transaction in one list, whether typed in, imported from the bank, or money in. Filter by All / Spending / Money in / From bank / Typed in. Import bank files from here. Transfers and card payments aren't counted.
+- **Plan:** income, savings each month (with what your goals need), the everyday-spending money that leaves, optional category limits, bills, subscriptions, goals, and the Grow calculator.
 
 ## Security
 
@@ -233,7 +243,7 @@ These were adapted from a standalone "Money Planner" module. They use the app's 
   - Auto-locks when you leave the app or after a set time, and hides content in the app switcher.
   - After 5 wrong PINs you have to wait; after 10, the device signs out and wipes its copy.
 - **Two-step login** with an authenticator app (TOTP, via Supabase MFA). The database enforces it: once an account has an authenticator, a restrictive policy on every table and a check in every sharing function need an `aal2` session (password + code). See `supabase/mfa.sql`.
-- **Private vault:** locked notes and the journal (when "Encrypt my journal" is on) are encrypted on the device with AES-256-GCM. The key comes from a random 130-bit vault password (PBKDF2-SHA256, 600k rounds), and the database only stores ciphertext. Each device can remember the key as a non-extractable CryptoKey in IndexedDB. The bank tab works the same way with its own password.
+- **Private vault:** locked notes and the journal (when "Encrypt my journal" is on) are encrypted on the device with AES-256-GCM. The key comes from a random 130-bit vault password (PBKDF2-SHA256, 600k rounds), and the database only stores ciphertext. Each device can remember the key as a non-extractable CryptoKey in IndexedDB. 
 - **Content Security Policy** (in `index.html`): scripts can load only from this site, jsDelivr (supabase-js) and Cloudflare Turnstile, and the app only connects to this Supabase project. Plugins and `<base>` tricks are blocked, and a frame-buster stops the app being embedded on other sites.
 - **Sign-up rules:** passwords need 12+ characters, can't be a common password, and can't contain your email name.
 - **Sign out if unused:** an optional per-device timer (1, 7 or 30 days).

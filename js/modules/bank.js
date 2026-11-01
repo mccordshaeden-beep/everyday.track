@@ -1,18 +1,11 @@
-// bank.js — the Bank tab (inside Money): bank transactions imported from CSV or OFX/QFX files,
-// protected by a separate, randomly generated 130-bit bank password.
+// bank.js — bringing bank transactions in (Money → Activity → Import bank file).
+// Reads Quicken/Money/QuickBooks (QFX/OFX/QBO), CSV and PDF statements on this device, then
+// saves each transaction as normal spending/income (source: 'bank'), so it shows up in the
+// one Activity list and in Safe to spend. Only date, description, amount and an account name
+// are kept, never account or routing numbers.
 //
-// Security model
-//  • The bank password never leaves the device. PBKDF2-SHA256 (600,000 rounds) turns it
-//    into two keys: AES-256-GCM to encrypt each transaction, and HMAC-SHA256 to make
-//    record ids (so ids don't reveal amounts or dates).
-//  • Only the encrypted form is saved and synced. Without the bank password nobody can
-//    read it: not someone who knows your account password, not the database owner.
-//  • The password is generated randomly (26 characters × 5 bits = 130 bits) because a
-//    person-chosen password's strength can't be measured reliably.
-//  • Forgot it? There's no recovery (that's the point). Reset the vault and re-import,
-//    since your bank still has all the data.
-//  • The vault locks when you tap Lock, after 10 minutes without a tap, or when the app
-//    has been in the background for 2 minutes.
+// Earlier versions kept bank data in a separate password-protected vault. migrateLegacy()
+// unlocks that once and moves everything into the normal list.
 import * as store from '../store.js';
 import {
   h, card, empty, btn, icon, iconBtn, openForm, openSheet, toast, bar, money,
@@ -25,10 +18,8 @@ const ITER = 600000;
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32: no I, L, O, U
 const PW_CHARS = 26;                                  // 26 × 5 bits = 130 bits
 
-let keys = null;      // { aes, hmac } while unlocked
-let cache = null;     // decrypted transactions while unlocked
-let month = ymd().slice(0, 7);
 let rr = () => {};
+const TX = 'txns';
 
 // ---- crypto helpers ---------------------------------------------------------------------
 const te = new TextEncoder(), td = new TextDecoder();
@@ -57,88 +48,49 @@ async function derive(password, salt, iter) {
     hmac: await crypto.subtle.importKey('raw', bits.slice(32), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']),
   };
 }
-async function seal(obj, k = keys) {
+async function seal(obj, k) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k.aes, te.encode(JSON.stringify(obj))));
   return { v: 1, iv: b64(iv), ct: b64(ct) };
 }
-async function open_(box, k = keys) {
+async function open_(box, k) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv) }, k.aes, unb64(box.ct));
   return JSON.parse(td.decode(pt));
 }
+
+// ---- ids + old vault migration ---------------------------------------------------------------
 async function recordId(text) {
-  return 'bk:' + hex(new Uint8Array(await crypto.subtle.sign('HMAC', keys.hmac, te.encode(text)))).slice(0, 32);
+  return 'bk:' + hex(new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode(text)))).slice(0, 32);
 }
-
-// ---- vault ---------------------------------------------------------------------------------
-export const vaultExists = () => !!store.get(VAULT_ID)?.salt;
-export const isUnlocked = () => !!keys;
-
-async function createVault(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const k = await derive(password, salt, ITER);
-  const check = await seal({ ok: 'everyday-bank-v1' }, k);
-  store.save('settings', { salt: b64(salt), iter: ITER, check, created: new Date().toISOString() }, VAULT_ID);
-  keys = k;
-  cache = [];
-  armAutoLock();
-}
-
-async function unlock(password) {
+/** Bank transactions still locked in the old password vault? */
+export const legacyCount = () => (store.get(VAULT_ID)?.salt ? store.list(COL).length : 0);
+const toTx = (r, extra = {}) => ({
+  date: r.date, amount: Math.abs(Number(r.amount) || 0), type: Number(r.amount) > 0 ? 'income' : 'expense',
+  category: r.category || 'Other', note: r.note || r.desc, desc: r.desc, account: r.account || '', source: 'bank', catSet: !!r.catSet, ...extra,
+});
+/** Unlock the old vault once and move everything into the normal list. */
+export async function migrateLegacy(password) {
   const v = store.get(VAULT_ID);
   const k = await derive(password, unb64(v.salt), v.iter || ITER);
   try { await open_(v.check, k); } catch { throw new Error('That bank password isn\'t right.'); }
-  keys = k;
-  await rebuild();
-  armAutoLock();
-}
-
-export function lock() { keys = null; cache = null; clearTimeout(idleTimer); }
-
-async function rebuild() {
-  if (!keys) return;
-  const out = [];
+  let moved = 0;
+  const seen = {};
   for (const it of store.list(COL)) {
-    try { out.push({ id: it.id, ...(await open_(it)) }); } catch { /* made with a different password (after a reset) */ }
+    let r;
+    try { r = await open_(it, k); } catch { continue; }
+    const base = `${r.date}|${Math.round(r.amount * 100) / 100}|${r.desc}`;
+    seen[base] = (seen[base] || 0) + 1;
+    const id = await recordId(`${base}|${seen[base]}`);
+    if (!store.get(id)) { store.save(TX, toTx(r), id); moved++; }
+    store.remove(it.id);
   }
-  cache = out;
+  store.remove(VAULT_ID);
+  return moved;
 }
-
-function resetVault() {
-  if (!confirm('Reset the bank vault? This permanently deletes all imported bank transactions on every device. You can import them again from your bank.')) return;
+/** Forgot the old password: delete the locked copies (re-import from the bank instead). */
+export function dropLegacy() {
   for (const it of store.list(COL)) store.remove(it.id);
   store.remove(VAULT_ID);
-  lock();
-  toast('Bank vault reset');
-}
-
-// Auto-lock: 10 minutes without a tap, or 2 minutes in the background.
-let idleTimer, hiddenAt = 0;
-function armAutoLock() {
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => { if (keys) { lock(); rr(); } }, 10 * 60000);
-}
-document.addEventListener('pointerdown', () => { if (keys) armAutoLock(); }, { passive: true });
-document.addEventListener('keydown', () => { if (keys) armAutoLock(); });
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') hiddenAt = Date.now();
-  else if (keys && hiddenAt && Date.now() - hiddenAt > 2 * 60000) { lock(); rr(); }
-});
-// When another device adds bank transactions, decrypt them too.
-store.subscribe(src => { if (src === 'remote' && keys) rebuild().then(() => rr()); });
-
-// ---- used by the Budget tab ----------------------------------------------------------------
-/** Bank spending for a month by category (only while unlocked). */
-export function bankSpending(ym) {
-  if (!cache) return null;
-  const byCat = {};
-  let spent = 0, income = 0;
-  for (const t of cache) {
-    if (!t.date?.startsWith(ym) || t.category === 'Transfer') continue;
-    if (t.amount < 0) { spent += -t.amount; byCat[t.category || 'Other'] = (byCat[t.category || 'Other'] || 0) - t.amount; }
-    else income += t.amount;
-  }
-  return { spent, income, byCat };
 }
 
 // ---- OFX / QFX / QBO reading (Quicken, Money and QuickBooks downloads) -----------------------
@@ -373,7 +325,7 @@ function guessCategory(desc, amount, catNames, learned) {
 /** Categories you picked yourself are remembered per merchant and reused next import. */
 function learnedRules() {
   const out = {};
-  for (const t of (cache || []).filter(t => t.catSet).sort((a, b) => (a.date || '').localeCompare(b.date || ''))) out[merchantKey(t.desc)] = t.category;
+  for (const t of store.list(TX).filter(t => t.source === 'bank' && t.catSet).sort((a, b) => (a.date || '').localeCompare(b.date || ''))) out[merchantKey(t.desc || t.note)] = t.category;
   return out;
 }
 
@@ -407,7 +359,7 @@ function showInstructions(catNames) {
       h('details', { class: 'bank-hints' }, h('summary', {}, 'Where it is at popular banks'),
         h('ul', {}, BANK_HINTS.map(([b, d]) => h('li', {}, h('b', {}, b + ': '), d))),
         h('p', { class: 'hint' }, 'Menus change sometimes. If you can\'t find it, search "[your bank] download transactions QFX" or "… CSV". Tip: stick to one format per account so the same purchase isn\'t imported twice.')),
-      h('p', { class: 'hint' }, '🔒 The file is read on this device. Only the date, description and amount are kept, never account numbers. Everything is encrypted with your bank password before it\'s saved.'),
+      h('p', { class: 'hint' }, '🔒 The file is read on this device. Only the date, description and amount are kept, never account or routing numbers.'),
     ],
     actions: [{ label: 'Choose bank file', cls: 'primary', onClick: () => file.click() }],
   });
@@ -450,7 +402,7 @@ async function previewImport(file, catNames) {
   const map = detectColumns(rows);
   const cats = categories(catNames);
   const learned = learnedRules();
-  const existing = new Set((cache || []).map(t => t.id));
+  const existing = new Set(store.list(TX).filter(t => t.source === 'bank').map(t => t.id));
   const colNames = rows[0].map((c, i) => map.hasHeader ? (c || `Column ${i + 1}`) : `Column ${i + 1} (e.g. ${String(c).slice(0, 18)})`);
   const colSelect = (key, label, optional) => {
     const sel = h('select', { onchange: () => { map[key] = Number(sel.value); draw(); } },
@@ -531,141 +483,17 @@ async function previewImport(file, catNames) {
       for (const t of inc) {
         const id = await recordId(t.sig);
         if (existing.has(id) || (store.known(id) && !store.get(id))) { skipped++; continue; }
-        const rec = { date: t.date, amount: t.amount, desc: t.desc, category: t.category, catSet: !!t.catSet, account: account.value.trim() };
-        store.save(COL, await seal(rec), id);
-        cache.push({ id, ...rec });
+        store.save(TX, toTx({ date: t.date, amount: t.amount, desc: t.desc, category: t.category, catSet: !!t.catSet, account: account.value.trim() }), id);
         existing.add(id);
         added++;
       }
       toast(`Imported ${added} transaction${added === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} already here` : ''}`);
-      if (added) month = parsed.map(t => t.date).sort().pop().slice(0, 7);
       rr();
     } }],
   });
 }
 
-// ---- editing ---------------------------------------------------------------------------------
-function editTx(t, catNames) {
-  openForm({
-    title: t.desc.slice(0, 40),
-    values: { category: t.category, note: t.note || '' },
-    fields: [
-      { name: 'category', label: 'Category', type: 'select', options: categories(catNames), hint: 'New imports from this merchant will use this category too.' },
-      { name: 'note', label: 'Note' },
-    ],
-    onSubmit: v => {
-      const rec = { ...t, ...v, catSet: true };
-      delete rec.id;
-      seal(rec).then(box => { store.save(COL, box, t.id); Object.assign(t, v, { catSet: true }); rr(); });
-    },
-    onDelete: () => { store.remove(t.id); cache = cache.filter(x => x.id !== t.id); rr(); },
-  });
-}
-
-// ---- screens -----------------------------------------------------------------------------------
-function setupCard() {
-  return card('Set up your bank vault', { cls: 'vault-card' },
-    h('div', { class: 'vault-icon' }, '🔒'),
-    h('p', {}, 'Import transactions from your bank (CSV file) to see where your money goes.'),
-    h('p', { class: 'muted' }, 'Bank data gets its own password, separate from your account. It encrypts everything here on your device, so no one can read it without that password: not someone with your account password, and not whoever runs the database.'),
-    h('div', { class: 'btn-row' }, btn('Create bank password', setupFlow, 'primary')));
-}
-
-function setupFlow() {
-  const pw = generatePassword();
-  const pwBox = h('code', { class: 'vault-pw' }, pw);
-  openSheet({
-    title: 'Your bank password',
-    body: [
-      h('p', {}, 'This password was made randomly for you. At ', h('b', {}, '130 bits'), ' of strength, it would take every computer on Earth longer than the age of the universe to guess.'),
-      pwBox,
-      h('div', { class: 'btn-row' },
-        btn('Copy', async () => { try { await navigator.clipboard.writeText(pw); toast('Copied'); } catch { toast('Press and hold the password to copy it'); } }, 'ghost sm')),
-      h('div', { class: 'allergy-warn' }, h('b', {}, 'Save it now. '), 'Put it in your password manager (iPhone: Settings → Passwords → +) or write it down somewhere safe. If you lose it, your imported bank data can\'t be recovered. You\'d reset and import again from your bank.'),
-      h('p', { class: 'hint' }, 'Why can\'t I choose my own? Passwords people make up are much easier to guess than they look, and there\'s no reliable way to check that one has 128 bits. A random one is guaranteed.'),
-    ],
-    actions: [{ label: 'I saved it. Next', cls: 'primary', onClick: () => confirmFlow(pw) }],
-  });
-}
-
-function confirmFlow(pw) {
-  openForm({
-    title: 'Confirm bank password',
-    fields: [{ name: 'pw', label: 'Type or paste your bank password', type: 'password', required: true, autofocus: true, hint: 'Dashes and capital letters don\'t matter.' }],
-    submitLabel: 'Create vault',
-    onSubmit: v => {
-      if (normalizePassword(v.pw) !== normalizePassword(pw)) { toast('That doesn\'t match. Check what you saved.'); return false; }
-      toast('Setting up…');
-      createVault(pw).then(() => { toast('Bank vault ready 🔒'); rr(); });
-    },
-  });
-}
-
-function lockedCard() {
-  const input = h('input', { type: 'password', placeholder: 'Bank password', autocomplete: 'current-password', 'aria-label': 'Bank password', 'data-fk': 'bank-pw' });
-  const msg = h('p', { class: 'login-msg', role: 'status' });
-  const go = async e => {
-    e?.preventDefault();
-    if (!input.value) return;
-    msg.className = 'login-msg'; msg.textContent = 'Unlocking…';
-    try { await unlock(input.value); rr(); }
-    catch (err) { msg.className = 'login-msg bad'; msg.textContent = err.message; }
-  };
-  return card('Bank is locked', { cls: 'vault-card' },
-    h('div', { class: 'vault-icon' }, '🔒'),
-    h('p', { class: 'muted' }, 'Enter your bank password to see and import bank transactions. It locks again after 10 minutes, or when you leave the app.'),
-    h('form', { class: 'stack-form', onsubmit: go }, input, h('button', { type: 'submit', class: 'btn primary' }, 'Unlock')),
-    msg,
-    h('div', { class: 'btn-row' }, btn('Forgot it? Reset bank vault', resetVault, 'ghost sm')));
-}
-
-export function renderBank(root, ctx, catNames) {
-  rr = ctx.rerender;
-  if (!vaultExists()) { root.append(setupCard()); return; }
-  if (!keys || !cache) { root.append(lockedCard()); return; }
-
-  root.append(h('div', { class: 'section-head' },
-    h('span', { class: 'muted small' }, '🔓 Unlocked · encrypted on this device'),
-    h('span', {},
-      btn('Lock', () => { lock(); rr(); }, 'ghost sm'),
-      addBtn_('Import bank file', () => showInstructions(catNames)))));
-
-  if (!cache.length) {
-    root.append(card('No bank transactions yet', {},
-      h('p', { class: 'muted' }, 'Download a CSV file from your bank and import it. There are step-by-step instructions on the next screen.'),
-      h('div', { class: 'btn-row' }, btn('How to import', () => showInstructions(catNames), 'primary'))));
-    return;
-  }
-
-  const label = parseYmd(month + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  root.append(h('div', { class: 'daynav' },
-    iconBtn('left', () => { month = addMonths(month + '-01', -1).slice(0, 7); rr(); }, 'Previous month'),
-    h('button', { type: 'button', class: 'daynav-label', onclick: () => { month = ymd().slice(0, 7); rr(); } }, label),
-    iconBtn('right', () => { month = addMonths(month + '-01', 1).slice(0, 7); rr(); }, 'Next month')));
-
-  const tx = cache.filter(t => t.date?.startsWith(month)).sort((a, b) => b.date.localeCompare(a.date));
-  const s = bankSpending(month);
-  root.append(h('div', { class: 'stat-row' },
-    h('div', { class: 'stat' }, h('b', {}, money(s.spent)), h('span', {}, 'money out')),
-    h('div', { class: 'stat' }, h('b', { class: 'ok' }, money(s.income)), h('span', {}, 'money in')),
-    h('div', { class: 'stat' }, h('b', { class: s.income - s.spent >= 0 ? 'ok' : 'bad' }, money(s.income - s.spent)), h('span', {}, 'net'))));
-
-  const cats = Object.entries(s.byCat).sort((a, b) => b[1] - a[1]);
-  const top = cats[0]?.[1] || 1;
-  const grid = h('div', { class: 'grid' });
-  if (cats.length) grid.append(card('Where it went', {}, cats.map(([c, v]) => h('div', { class: 'cat' },
-    h('div', { class: 'cat-line' }, h('span', {}, c), h('span', { class: 'muted' }, money(v))), bar(v, top)))));
-
-  const days = [...new Set(tx.map(t => t.date))];
-  grid.append(card(`Transactions (${tx.length})`, {}, tx.length ? days.map(d => [
-    h('p', { class: 'eyebrow day-sep' }, relDay(d)),
-    tx.filter(t => t.date === d).map(t => h('div', { class: 'row' + (t.category === 'Transfer' ? ' muted' : ''), onclick: () => editTx(t, catNames) },
-      h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, t.desc),
-        h('div', { class: 'row-meta' }, h('span', { class: 'tag' }, t.category), t.account ? h('span', { class: 'row-sub' }, t.account) : null, t.note ? h('span', { class: 'row-sub' }, t.note) : null)),
-      h('div', { class: t.amount > 0 ? 'amt in' : 'amt' }, (t.amount > 0 ? '+' : '') + money(t.amount)))),
-  ]) : empty('No bank transactions this month.')));
-  root.append(grid);
-  root.append(h('p', { class: 'hint' }, 'Tap a transaction to change its category. Transfers aren\'t counted as spending. While unlocked, bank spending is included in your Budget tab.'));
-}
-
-const addBtn_ = (label, onclick) => h('button', { type: 'button', class: 'btn primary sm', onclick }, icon('plus', 16), h('span', {}, label));
+// ---- used by Money → Activity --------------------------------------------------------------
+export const setBankRerender = fn => { rr = fn; };
+export const importBank = catNames => showInstructions(catNames);
+export { merchantKey };

@@ -1,12 +1,15 @@
-// money.js — budget + chart, spending log with subscriptions beside it, bills, savings goals,
-// a compound-growth planner (Grow) and spending insights.
+// money.js — built around one number: Safe to spend.
+//   Safe to spend = income − bills & subscriptions − savings − what you've spent so far.
+// Tabs: This month (the number, what's coming up, categories, heads-up) · Activity (every
+// transaction in one list: typed in, imported from the bank, money in) · Plan (income,
+// savings, category limits, bills, subscriptions, goals and the Grow calculator).
 import * as store from '../store.js';
 import {
   h, pageHead, card, empty, seg, addBtn, btn, icon, iconBtn, openForm, bar, barChart, money, toast,
   ymd, addDays, addMonths, daysBetween, relDay, parseYmd, fmtMonthYear,
   CYCLES, PER_MONTH, CYCLE_SHORT, nthOccurrence, nextOnOrAfter, countOccurrences,
 } from '../ui.js';
-import { renderBank, bankSpending, vaultExists, isUnlocked } from './bank.js';
+import { setBankRerender, importBank, legacyCount, migrateLegacy, dropLegacy } from './bank.js';
 
 export const id = 'money';
 export const title = 'Money';
@@ -17,21 +20,25 @@ const SUBS = 'subs';      // { name, amount, cycle, started, nextDate, category,
 const BILLS = 'bills';    // { name, amount, cycle, dueDate, category, autopay, notes }
 const PAID = 'billpays';  // id "bp:<billId>:<dueDate>" → { billId, due, paidOn, amount }
 const GOALS = 'goals';    // { name, emoji, target, saved, deadline }
-const BUDGET_ID = 'settings:budget'; // { income, categories: [{ name, limit }] }
+const BUDGET_ID = 'settings:budget'; // { income, save, categories: [{ name, limit }] }
 const GROW_ID = 'settings:grow';     // { start, monthly, years, rate }
 const DEFAULT_CATS = [
   { name: 'Groceries', limit: 250 }, { name: 'Eating out', limit: 100 }, { name: 'Gas & transport', limit: 100 },
   { name: 'Fun', limit: 75 }, { name: 'Shopping', limit: 75 }, { name: 'Other', limit: 50 },
 ];
 
-let tab = 'budget';
+// Three tabs: This month (safe to spend) · Activity (everything in one list) · Plan.
+let tab = 'month';
 let month = ymd().slice(0, 7);
-export function setTab(t) { tab = t === 'subs' ? 'spending' : t; }
+let actFilter = 'all';
+let growOpen = false;
+const OLD_TABS = { budget: 'month', insights: 'month', spending: 'activity', subs: 'plan', bank: 'activity', bills: 'plan', goals: 'plan', grow: 'plan' };
+export function setTab(t) { tab = OLD_TABS[t] || (['month', 'activity', 'plan'].includes(t) ? t : 'month'); }
 
 // ---- budget ------------------------------------------------------------------------
 export function getBudget() {
   const b = store.get(BUDGET_ID);
-  return { income: b?.income || '', categories: b?.categories?.length ? b.categories : DEFAULT_CATS, isDefault: !b };
+  return { income: b?.income || '', save: b?.save ?? '', categories: b?.categories?.length ? b.categories : DEFAULT_CATS, isDefault: !b };
 }
 const catNames = () => getBudget().categories.map(c => c.name);
 
@@ -49,72 +56,85 @@ function editBudget() {
         const m = line.match(/^(.+?)\s*[:=-]\s*\$?([\d,.]+)\s*$/);
         return m ? { name: m[1].trim(), limit: Number(m[2].replace(/,/g, '')) } : line.trim() ? { name: line.trim(), limit: 0 } : null;
       }).filter(Boolean);
-      store.save('settings', { income: v.income, categories }, BUDGET_ID);
+      store.save('settings', { income: v.income, categories }, BUDGET_ID); // (save is kept: store.save merges)
     },
   });
 }
 
 export function monthStats(ym) {
   const txns = store.list(TX).filter(t => t.date?.startsWith(ym));
-  const spent = txns.filter(t => t.type !== 'income').reduce((s, t) => s + (Number(t.amount) || 0), 0);
-  const income = txns.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const counted = txns.filter(t => t.category !== 'Transfer');
+  const spent = counted.filter(t => t.type !== 'income').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const income = counted.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.amount) || 0), 0);
   const byCat = {};
-  for (const t of txns) if (t.type !== 'income') byCat[t.category || 'Other'] = (byCat[t.category || 'Other'] || 0) + (Number(t.amount) || 0);
+  for (const t of counted) if (t.type !== 'income') byCat[t.category || 'Other'] = (byCat[t.category || 'Other'] || 0) + (Number(t.amount) || 0);
   const budget = getBudget();
   const limit = budget.categories.reduce((s, c) => s + (Number(c.limit) || 0), 0);
-  // Bank transactions count too, but only while the bank vault is unlocked.
-  const bank = bankSpending(ym);
-  let spentAll = spent, incomeAll = income;
-  if (bank) {
-    spentAll += bank.spent; incomeAll += bank.income;
-    for (const [c, v] of Object.entries(bank.byCat)) byCat[c] = (byCat[c] || 0) + v;
-  }
-  return { txns, spent: spentAll, income: incomeAll, byCat, budget, limit, bankIncluded: !!bank, bankLocked: vaultExists() && !isUnlocked() };
+  return { txns, spent, income, byCat, budget, limit };
 }
 
-/** Big "spent of budget" block, used here and on the Today screen. */
+// ---- safe to spend -------------------------------------------------------------------------------
+const FIXED = ['Bills', 'Subscriptions'];
+const dimOf = ym => new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate();
+/** Savings a month that would hit every goal with a date on time. */
+export function goalsMonthly() {
+  return store.list(GOALS).reduce((sum, g) => {
+    const left = Math.max(0, (Number(g.target) || 0) - (Number(g.saved) || 0));
+    if (!left || !g.deadline || g.deadline < ymd()) return sum;
+    return sum + left / Math.max(1, Math.ceil(daysBetween(ymd(), g.deadline) / 30.4));
+  }, 0);
+}
+export function safeToSpend(ym = ymd().slice(0, 7)) {
+  const s = monthStats(ym);
+  const planned = Number(s.budget.income) || 0;
+  const income = Math.max(planned, s.income);             // planned paycheck or what actually came in, whichever is more
+  const fixedPaid = FIXED.reduce((a, c) => a + (s.byCat[c] || 0), 0);
+  const fixedPlan = subsMonthly() + billsMonthly();
+  const fixed = Math.max(fixedPlan, fixedPaid);            // your list of bills/subs, or what was really paid
+  const savedLogged = s.byCat.Savings || 0;
+  const save = Math.max(Number(s.budget.save) || 0, savedLogged);
+  const flexSpent = Math.max(0, s.spent - fixedPaid - savedLogged); // everyday spending
+  const left = income - fixed - save - flexSpent;
+  const isNow = ym === ymd().slice(0, 7);
+  const today = Number(ymd().slice(8));
+  const daysLeft = isNow ? dimOf(ym) - today + 1 : 0;
+  const perDay = daysLeft ? Math.max(0, left) / daysLeft : 0;
+  const weekDays = isNow ? Math.min(daysLeft, 7 - ((new Date().getDay() + 6) % 7)) : 0; // through Sunday
+  return { ...s, planned, income, fixed, fixedPlan, fixedPaid, save, flexSpent, left, isNow, daysLeft, perDay, week: perDay * weekDays, hasPlan: income > 0,
+    flexBudget: income - fixed - save };
+}
+
+/** The Safe-to-spend block, used here and on the Today screen. */
 export function summaryBlock(ym) {
-  const s = monthStats(ym);
-  const left = s.limit - s.spent;
-  return h('div', { class: 'money-sum' },
-    h('div', { class: 'big' }, money(s.spent)),
-    h('div', { class: 'row-sub' }, s.limit ? `spent of ${money(s.limit)} · ` : 'spent · ',
-      s.limit ? h('b', { class: left >= 0 ? 'ok' : 'bad' }, left >= 0 ? `${money(left)} left` : `${money(-left)} over`) : null),
-    s.limit ? bar(s.spent, s.limit) : null);
-}
-
-/** Bills still to pay in the rest of this month (paid ones are already in spending). */
-function billsLeftThisMonth(ym) {
-  if (ym !== ymd().slice(0, 7)) return 0;
-  const end = addDays(addMonths(ym + '-01', 1), -1);
-  let sum = 0;
-  for (const b of store.list(BILLS)) {
-    if (!b.dueDate) continue;
-    let d = nextDue(b);
-    for (let i = 0; d && d <= end && i < 40; i++) {
-      if (!isPaid(b, d)) sum += Number(b.amount) || 0;
-      d = nextOnOrAfter(b.dueDate, b.cycle || 'monthly', addDays(d, 1));
-    }
+  const p = safeToSpend(ym);
+  if (!p.hasPlan) {
+    const s = p;
+    return h('div', { class: 'money-sum' },
+      h('div', { class: 'big' }, money(s.spent)), h('div', { class: 'row-sub' }, 'spent this month · set your income in Money → Plan to see what\'s safe to spend'));
   }
-  return sum;
-}
-/** Income, what's left after spending + subscriptions + bills still due, and the savings rate. */
-export function planStats(ym) {
-  const s = monthStats(ym);
-  const income = s.income || Number(s.budget.income) || 0;
-  const subs = subsMonthly();
-  const billsLeft = billsLeftThisMonth(ym);
-  const leftover = income - s.spent - subs - billsLeft;
-  return { ...s, incomeUsed: income, subs, billsLeft, leftover, rate: income > 0 ? leftover / income : null };
+  return h('div', { class: 'money-sum' },
+    h('div', { class: 'big ' + (p.left >= 0 ? 'ok' : 'bad') }, money0(p.left)),
+    h('div', { class: 'row-sub' }, p.left >= 0 ? `safe to spend${p.isNow ? ` · about ${money0(Math.floor(p.perDay))}/day` : ''}` : 'over your plan this month'),
+    bar(p.flexSpent, Math.max(1, p.flexBudget), 'budget' + (p.flexBudget > 0 && p.flexSpent / p.flexBudget >= 0.8 && p.flexSpent <= p.flexBudget ? ' warn' : '')));
 }
 
 function editIncome() {
   openForm({
     title: 'Monthly income',
     values: { income: getBudget().income },
-    note: 'Roughly what you take home in a month (after taxes). Used for "left over" and your savings rate. Income you log under Spending counts first.',
+    note: 'Roughly what you take home in a month, after taxes. If more actually comes in (logged or imported), the larger amount is used.',
     fields: [{ name: 'income', label: 'Monthly income ($)', type: 'number', step: '0.01', min: '0', inputmode: 'decimal', autofocus: true }],
     onSubmit: v => { const b = getBudget(); store.save('settings', { income: Math.max(0, Number(v.income) || 0), categories: b.categories }, BUDGET_ID); toast('Income saved ✓'); },
+  });
+}
+function editSave() {
+  const sug = Math.ceil(goalsMonthly());
+  openForm({
+    title: 'Savings each month',
+    values: { save: getBudget().save },
+    note: `Set this aside first, before everyday spending. ${sug ? `To hit your goals on time you'd need about ${money(sug)}/month.` : 'Many people aim for 10–20% of income.'} Log money you move to savings with the category "Savings".`,
+    fields: [{ name: 'save', label: 'Save each month ($)', type: 'number', step: '0.01', min: '0', inputmode: 'decimal', autofocus: true }],
+    onSubmit: v => { const b = getBudget(); store.save('settings', { income: b.income, save: Math.max(0, Number(v.save) || 0), categories: b.categories }, BUDGET_ID); toast('Saved ✓'); },
   });
 }
 function addCategory() {
@@ -136,64 +156,12 @@ function addCategory() {
 /** Budget bar: amber from 80%, red when over. */
 const budgetBar = (spent, limit) => bar(spent, limit, `budget${limit > 0 && spent <= limit && spent / limit >= 0.8 ? ' warn' : ''}`);
 
-function statTiles(p) {
-  const tile = (label, value, cls = '', onclick) => h(onclick ? 'button' : 'div', { class: 'mstat' + (onclick ? ' tap' : ''), ...(onclick ? { type: 'button', onclick } : {}) },
-    h('span', { class: 'muted small' }, label), h('b', { class: cls }, value));
-  return h('div', { class: 'mstats' },
-    tile('Income', p.incomeUsed ? money(p.incomeUsed) : 'Set ›', '', editIncome),
-    tile('Left over', p.incomeUsed ? money(p.leftover) : '–', p.incomeUsed ? (p.leftover >= 0 ? 'ok' : 'bad') : ''),
-    tile('Savings rate', p.rate == null ? '–' : `${Math.round(p.rate * 100)}%`, p.rate == null ? '' : p.rate >= 0.1 ? 'ok' : p.rate < 0 ? 'bad' : ''));
-}
-
 function monthNav(ctx) {
   const label = parseYmd(month + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   return h('div', { class: 'daynav' },
     iconBtn('left', () => { month = addMonths(month + '-01', -1).slice(0, 7); ctx.rerender(); }, 'Previous month'),
     h('button', { type: 'button', class: 'daynav-label', onclick: () => { month = ymd().slice(0, 7); ctx.rerender(); } }, label),
     iconBtn('right', () => { month = addMonths(month + '-01', 1).slice(0, 7); ctx.rerender(); }, 'Next month'));
-}
-
-function renderBudget(root, ctx) {
-  root.append(monthNav(ctx));
-  const s = monthStats(month);
-  const subsMo = subsMonthly();
-  const billsMo = billsMonthly();
-  const grid = h('div', { class: 'grid' });
-
-  const p = planStats(month);
-  grid.append(card('This month', { action: btn('Edit budget', editBudget, 'ghost sm') },
-    statTiles(p),
-    summaryBlock(month),
-    h('dl', { class: 'facts' },
-      s.income || s.budget.income ? [h('dt', {}, 'Income'), h('dd', {}, money(s.income || s.budget.income))] : null,
-      h('dt', {}, 'Subscriptions'), h('dd', {}, `${money(subsMo)}/mo`),
-      h('dt', {}, 'Bills'), h('dd', {}, `${money(billsMo)}/mo`),
-      h('dt', {}, 'Fixed costs total'), h('dd', {}, `${money(subsMo + billsMo)}/mo`)),
-    p.incomeUsed ? h('p', { class: 'hint' }, `Left over = income − spending − subscriptions${p.billsLeft ? ` − ${money(p.billsLeft)} in bills still due this month` : ''}.`) : h('p', { class: 'hint' }, 'Tap "Income" to see what\'s left over and your savings rate.'),
-    s.budget.isDefault ? h('p', { class: 'hint' }, 'These categories are examples. Tap "Edit budget" to set your own.') : null,
-    s.bankIncluded ? h('p', { class: 'hint' }, '🔓 Includes your bank transactions.') : s.bankLocked ? h('p', { class: 'hint' }, '🔒 Bank transactions aren\'t included while the Bank tab is locked.') : null));
-
-  // last 6 months
-  const months = Array.from({ length: 6 }, (_, i) => addMonths(month + '-01', i - 5).slice(0, 7));
-  const vals = months.map(ym => ({
-    label: parseYmd(ym + '-01').toLocaleDateString(undefined, { month: 'short' }),
-    value: Math.round(monthStats(ym).spent),
-    highlight: ym === month,
-  }));
-  const avg = vals.reduce((a, v) => a + v.value, 0) / vals.filter(v => v.value > 0).length || 0;
-  grid.append(card('Spent per month', {},
-    barChart(vals, { format: v => money(v).replace(/\.00$/, ''), caption: avg ? `Average ${money(avg)} a month. Tap a bar for its total.` : 'Tap a bar for its total.' })));
-
-  const cats = [...s.budget.categories];
-  for (const name of Object.keys(s.byCat)) if (!cats.some(c => c.name === name)) cats.push({ name, limit: 0 });
-  cats.sort((a, b) => (s.byCat[b.name] || 0) - (s.byCat[a.name] || 0));
-  grid.append(card('By category', { action: btn('+ Category', addCategory, 'ghost sm') }, cats.map(c => {
-    const spent = s.byCat[c.name] || 0;
-    return h('div', { class: 'cat' },
-      h('div', { class: 'cat-line' }, h('span', {}, c.name), h('span', { class: c.limit && spent > c.limit ? 'bad' : 'muted' }, `${money(spent)}${c.limit ? ' / ' + money(c.limit) : ''}`)),
-      c.limit ? budgetBar(spent, c.limit) : null);
-  })));
-  root.append(grid);
 }
 
 // ---- spending ------------------------------------------------------------------------
@@ -204,43 +172,66 @@ export function editTxn(t, defaults = {}) {
     fields: [
       { name: 'amount', label: 'Amount ($)', type: 'number', step: '0.01', min: '0', inputmode: 'decimal', required: true, autofocus: true },
       { name: 'type', label: 'Type', type: 'select', options: [['expense', 'Spent'], ['income', 'Money in']] },
-      { name: 'category', label: 'Category', type: 'select', options: [...new Set([...catNames(), 'Bills', 'Subscriptions', 'Savings', 'Income', 'Other'])] },
+      { name: 'category', label: 'Category', type: 'select', options: [...new Set([...catNames(), 'Bills', 'Subscriptions', 'Savings', 'Income', 'Transfer', 'Other'])], hint: t?.source === 'bank' ? 'Imported from your bank. Future imports from this place will use the category you pick.' : '' },
       { name: 'note', label: 'What for?', placeholder: 'Chipotle, gas, rent…' },
       { name: 'date', label: 'Date', type: 'date', required: true },
     ],
-    onSubmit: v => { store.save(TX, v, t?.id); },
+    onSubmit: v => { store.save(TX, { ...v, ...(t?.source === 'bank' && v.category !== t.category ? { catSet: true } : {}) }, t?.id); },
     onDelete: t ? () => store.remove(t.id) : null,
   });
 }
 
-function renderSpending(root, ctx) {
+function legacyCard(rerender) {
+  const n = legacyCount();
+  if (!n) return null;
+  const pw = h('input', { type: 'password', placeholder: 'Old bank password', autocomplete: 'current-password', 'aria-label': 'Old bank password' });
+  const msg = h('p', { class: 'small', role: 'status' });
+  return card('Move your bank transactions', { cls: 'warn-card' },
+    h('p', {}, `The bank password is gone. ${n} transaction${n === 1 ? ' is' : 's are'} still locked with it. Enter the old bank password once to move them into this list.`),
+    h('form', { class: 'quick', onsubmit: async e => {
+      e.preventDefault(); msg.textContent = 'Moving…';
+      try { const moved = await migrateLegacy(pw.value); toast(`Moved ${moved} bank transaction${moved === 1 ? '' : 's'} ✓`); rerender(); }
+      catch (err) { msg.textContent = err.message; }
+    } }, pw, h('button', { type: 'submit', class: 'btn primary sm' }, 'Move them')),
+    msg,
+    h('button', { type: 'button', class: 'mini-link', onclick: () => { if (confirm(`Delete the ${n} locked bank transactions? You can import them again from your bank.`)) { dropLegacy(); rerender(); } } }, 'Forgot it? Delete them and re-import'));
+}
+
+const ACT_FILTERS = [['all', 'All'], ['out', 'Spending'], ['in', 'Money in'], ['bank', 'From bank'], ['manual', 'Typed in']];
+function renderActivity(root, ctx) {
+  setBankRerender(ctx.rerender);
   const amount = h('input', { type: 'number', step: '0.01', min: '0', inputmode: 'decimal', placeholder: '$0.00', 'data-fk': 'tx-amt', 'aria-label': 'Amount', required: true });
   const cat = h('select', { 'aria-label': 'Category' }, catNames().map(c => h('option', {}, c)));
   const note = h('input', { type: 'text', placeholder: 'What for?', 'aria-label': 'Note', enterkeyhint: 'done' });
-  const left = h('div', { class: 'stack' });
-  left.append(h('form', {
-    class: 'quick quick-money',
-    onsubmit: e => {
-      e.preventDefault();
-      if (!amount.value) return;
-      store.save(TX, { amount: Number(amount.value), category: cat.value, note: note.value.trim(), type: 'expense', date: ymd() });
-      amount.focus();
-    },
-  }, amount, cat, note, h('button', { type: 'submit', class: 'icon-btn solid', 'aria-label': 'Add' }, icon('plus', 20))));
+  root.append(h('form', { class: 'quick quick-money', onsubmit: e => {
+    e.preventDefault();
+    if (!amount.value) return;
+    store.save(TX, { amount: Number(amount.value), category: cat.value, note: note.value.trim(), type: 'expense', date: ymd() });
+    amount.focus();
+  } }, amount, cat, note, h('button', { type: 'submit', class: 'icon-btn solid', 'aria-label': 'Add' }, icon('plus', 20))));
+  root.append(h('div', { class: 'btn-row act-actions' },
+    btn('🏦 Import bank file', () => importBank(catNames()), 'ghost sm'),
+    btn('+ Money in', () => editTxn(null, { type: 'income', category: 'Income' }), 'ghost sm')));
+  const lc = legacyCard(ctx.rerender);
+  if (lc) root.append(lc);
 
-  left.append(monthNav(ctx));
-  const txns = monthStats(month).txns.sort((a, b) => b.date.localeCompare(a.date) || (b.created || '').localeCompare(a.created || ''));
-  if (!txns.length) left.append(empty('No spending logged this month.'));
-  const days = [...new Set(txns.map(t => t.date))];
-  for (const d of days) {
-    const list = txns.filter(t => t.date === d);
-    left.append(card(relDay(d), {}, list.map(t => h('div', { class: 'row', onclick: () => editTxn(t) },
-      h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, t.note || t.category), h('div', { class: 'row-sub' }, t.category)),
+  root.append(monthNav(ctx));
+  root.append(h('div', { class: 'chip-row' }, ACT_FILTERS.map(([v, l]) => h('button', { type: 'button', class: 'chip' + (actFilter === v ? ' on' : ''), onclick: () => { actFilter = v; ctx.rerender(); } }, l))));
+  const all = monthStats(month).txns;
+  const txns = all.filter(t => actFilter === 'all' || (actFilter === 'out' && t.type !== 'income') || (actFilter === 'in' && t.type === 'income')
+      || (actFilter === 'bank' && t.source === 'bank') || (actFilter === 'manual' && t.source !== 'bank'))
+    .sort((a, b) => b.date.localeCompare(a.date) || (b.created || '').localeCompare(a.created || ''));
+  const out = all.filter(t => t.type !== 'income' && t.category !== 'Transfer').reduce((a, t) => a + (Number(t.amount) || 0), 0);
+  const inn = all.filter(t => t.type === 'income' && t.category !== 'Transfer').reduce((a, t) => a + (Number(t.amount) || 0), 0);
+  root.append(h('p', { class: 'muted small act-sum' }, `${all.length} transaction${all.length === 1 ? '' : 's'} · ${money(out)} out · ${money(inn)} in`));
+  if (!txns.length) { root.append(empty(all.length ? 'Nothing matches this filter.' : 'Nothing yet this month. Type spending above, or import a file from your bank.')); return; }
+  for (const d of [...new Set(txns.map(t => t.date))]) {
+    root.append(card(relDay(d), {}, txns.filter(t => t.date === d).map(t => h('div', { class: 'row' + (t.category === 'Transfer' ? ' muted' : ''), onclick: () => editTxn(t) },
+      h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, t.note || t.desc || t.category),
+        h('div', { class: 'row-meta' }, h('span', { class: 'tag' }, t.category === 'Transfer' ? 'Transfer · not counted' : t.category), t.source === 'bank' ? h('span', { class: 'row-sub' }, `🏦 ${t.account || 'Bank'}`) : null)),
       h('div', { class: t.type === 'income' ? 'amt in' : 'amt' }, (t.type === 'income' ? '+' : '') + money(t.amount))))));
   }
-
-  // Subscriptions live in their own column beside the spending list (below it on a phone).
-  root.append(h('div', { class: 'split money-split' }, left, subsPanel()));
+  root.append(h('p', { class: 'hint' }, 'Tap anything to change its category or delete it. Transfers and card payments aren\'t counted, so nothing is counted twice.'));
 }
 
 // ---- subscriptions ----------------------------------------------------------------------
@@ -375,15 +366,6 @@ export function billRow(b) {
     btn('Paid', () => markBillPaid(b, due), 'ghost sm'));
 }
 
-function renderBills(root) {
-  const list = store.list(BILLS).map(b => ({ ...b, due: nextDue(b) })).sort((a, b) => (a.due || '').localeCompare(b.due || ''));
-  root.append(h('div', { class: 'stat-row two' },
-    h('div', { class: 'stat' }, h('b', {}, money(billsMonthly())), h('span', {}, 'bills per month')),
-    h('div', { class: 'stat' }, h('b', {}, String(billsDueSoon(7).length)), h('span', {}, 'due this week'))));
-  root.append(card('By due date', { action: addBtn('Add', () => editBill(null)) },
-    list.length ? list.map(billRow) : empty('Add rent, phone, car and other bills. Upcoming ones show on your Today screen, and "Paid" logs the payment for you.')));
-}
-
 // ---- savings goals ---------------------------------------------------------------------------
 function editGoal(g) {
   openForm({
@@ -431,12 +413,6 @@ function goalCard(g) {
       left <= 0 ? '🎉 Goal reached!'
         : g.deadline ? (g.deadline < ymd() ? `${money(left)} to go. The target date has passed.` : `${money(left)} to go · about ${money(left / months)}/month to reach it by ${relDay(g.deadline)}`)
         : `${money(left)} to go`));
-}
-
-function renderGoals(root) {
-  const goals = store.list(GOALS).sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
-  root.append(h('div', { class: 'section-head' }, h('p', { class: 'muted' }, 'Track what you\'re saving for.'), addBtn('Goal', () => editGoal(null))));
-  root.append(goals.length ? h('div', { class: 'grid' }, goals.map(goalCard)) : empty('No goals yet. Add one like "Emergency fund: $1,000".'));
 }
 
 // ---- grow: put idle money to work ---------------------------------------------------------------
@@ -505,14 +481,16 @@ function renderGrow(root) {
     input('start', 'Starting amount ($)', { min: 0, step: 1 }), input('monthly', 'Added each month ($)', { min: 0, step: 1 }),
     input('years', 'Years', { min: 1, max: 60, step: 1 }), input('rate', 'Yearly return (%)', { min: 0, max: 20, step: 0.1 }));
   const setField = (k, v) => { g[k] = v; fields.querySelector(`[data-k="${k}"]`).value = v; draw(); save(); };
-  const leftover = Math.floor(planStats(ymd().slice(0, 7)).leftover);
+  const leftover = Math.floor(safeToSpend().left);
 
-  root.append(card('Put idle money to work', {},
+  root.append(card('Grow: put idle money to work', {},
     h('p', { class: 'muted' }, 'See how money grows when it isn\'t just sitting in checking. The rates are example assumptions you can change. Check current rates, and remember investment returns aren\'t guaranteed.'),
     h('div', { class: 'chip-row' }, PRESETS.map(([r, l]) => h('button', { type: 'button', class: 'chip', onclick: () => setField('rate', r) }, l))),
     fields,
-    h('div', { class: 'btn-row' }, btn('Use my monthly leftover', () => {
-      if (!(leftover > 0)) { toast('No leftover this month yet. Set your income on the Budget tab first.'); return; }
+    h('div', { class: 'btn-row' }, btn('Use my monthly savings', () => {
+      const v = Math.round(Number(getBudget().save) || 0) || leftover;
+      if (!(v > 0)) { toast('Set "Savings each month" in your plan first.'); return; }
+      setField('monthly', v); toast(`Using ${money0(v)}/month`); return;
       setField('monthly', leftover); toast(`Using ${money0(leftover)}/month`);
     }, 'ghost sm')),
     tiles, chartBox));
@@ -529,77 +507,125 @@ function renderGrow(root) {
 }
 
 // ---- insights: where it went + heads-up -----------------------------------------------------
-const PALETTE = ['var(--hc-blue)', 'var(--hc-green)', 'var(--hc-yellow)', 'var(--hc-red)', 'var(--hc-purple)', 'var(--hc-teal)', 'var(--hc-pink)', 'var(--hc-gray)'];
-function donut(entries, total) {
-  const ns = 'http://www.w3.org/2000/svg';
-  const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
-  const R = 52, C = 2 * Math.PI * R;
-  const svg = el('svg', { viewBox: '0 0 140 140', class: 'donut', role: 'img', 'aria-label': entries.map(([n, v]) => `${n} ${money(v)}`).join(', ') });
-  svg.append(el('circle', { cx: 70, cy: 70, r: R, class: 'donut-bg' }));
-  let off = 0;
-  entries.forEach(([, v], i) => {
-    const len = (v / total) * C;
-    svg.append(el('circle', { cx: 70, cy: 70, r: R, fill: 'none', stroke: PALETTE[i % PALETTE.length], 'stroke-width': 18, 'stroke-dasharray': `${Math.max(0, len - 1.5)} ${C}`, 'stroke-dashoffset': -off, transform: 'rotate(-90 70 70)' }));
-    off += len;
-  });
-  const center = document.createElementNS(ns, 'text');
-  center.setAttribute('x', 70); center.setAttribute('y', 75); center.setAttribute('text-anchor', 'middle'); center.setAttribute('class', 'donut-total');
-  center.textContent = money0(total);
-  svg.append(center);
-  return svg;
-}
-
 function insightFlags(ym) {
-  const p = planStats(ym), last = monthStats(addMonths(ym + '-01', -1).slice(0, 7));
+  const p = safeToSpend(ym), last = monthStats(addMonths(ym + '-01', -1).slice(0, 7));
   const flags = [];
-  const isNow = ym === ymd().slice(0, 7);
-  const d = new Date(), dim = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-  const monthPct = isNow ? (d.getDate() / dim) * 100 : 100;
+  const d = new Date(), monthPct = p.isNow ? (d.getDate() / dimOf(ym)) * 100 : 100;
   for (const c of p.budget.categories) {
     const s = p.byCat[c.name] || 0, lim = Number(c.limit) || 0, pct = lim ? (s / lim) * 100 : 0;
-    if (lim && s > lim) flags.push(['bad', `${c.name} is over budget by ${money(s - lim)}.`]);
+    if (lim && s > lim) flags.push(['bad', `${c.name} is over its limit by ${money(s - lim)}.`]);
     else if (lim && pct >= 80) flags.push(['warn', `${c.name} is at ${Math.round(pct)}% of its limit.`]);
-    else if (lim && isNow && d.getDate() >= 5 && pct > monthPct + 15) flags.push(['warn', `${c.name} is spending faster than the month is passing (${Math.round(pct)}% used, ${Math.round(monthPct)}% of the month gone).`]);
+    else if (lim && p.isNow && d.getDate() >= 5 && pct > monthPct + 15) flags.push(['warn', `${c.name} is going faster than the month (${Math.round(pct)}% used, ${Math.round(monthPct)}% of the month gone).`]);
     const prev = last.byCat[c.name] || 0;
-    if (prev > 0 && s > prev * 1.25) flags.push(['warn', `${c.name} is up ${Math.round((s / prev - 1) * 100)}% compared with last month.`]);
+    if (prev > 0 && s > prev * 1.25 && s - prev > 20) flags.push(['warn', `${c.name} is up ${Math.round((s / prev - 1) * 100)}% from last month.`]);
   }
-  const budgeted = p.budget.categories.reduce((a, c) => a + (Number(c.limit) || 0), 0);
-  if (p.incomeUsed > 0 && budgeted + p.subs > p.incomeUsed) flags.push(['bad', `Your budgets plus subscriptions add up to ${money(budgeted + p.subs)}, more than your ${money(p.incomeUsed)} income.`]);
-  if (p.incomeUsed > 0) {
-    if (p.leftover > 0) flags.push(['good', `You have ${money(p.leftover)} left this month. Move some to a goal or high-yield savings instead of leaving it in checking (see Goals and Grow).`, 'goals']);
-    if (p.rate != null && p.rate < 0.1 && p.leftover >= 0) flags.push(['warn', `Your savings rate is ${Math.round(p.rate * 100)}%. Many people aim for 10–20%.`]);
-    if (p.subs > 0 && p.subs / p.incomeUsed >= 0.1) flags.push(['warn', `Subscriptions cost ${money(p.subs)}/month, ${Math.round((p.subs / p.incomeUsed) * 100)}% of your income. Worth a look on the Spending tab.`]);
-  } else flags.push(['info', 'Set your monthly income on the Budget tab to unlock left-over and savings-rate tips.', 'income']);
-  if (last.spent > 0 && p.spent < last.spent && (!isNow || d.getDate() >= 25)) flags.push(['good', `You've spent ${money(last.spent - p.spent)} less than last month. Nice!`]);
+  if (p.hasPlan) {
+    if (p.left < 0) flags.push(['bad', `You're ${money(-p.left)} past your plan this month. Ease off everyday spending, or lower savings this month.`]);
+    else if (p.isNow && p.flexBudget > 0 && p.flexSpent / p.flexBudget > monthPct / 100 + 0.15 && d.getDate() >= 5) flags.push(['warn', `Everyday spending is ahead of the month: ${Math.round((p.flexSpent / p.flexBudget) * 100)}% used, ${Math.round(monthPct)}% of the month gone.`]);
+    if (!p.save) flags.push(['info', 'Your plan has no savings yet. Even a small amount each month adds up (see Grow in Plan).', 'save']);
+    if (p.fixed / p.income >= 0.6) flags.push(['warn', `Bills and subscriptions take ${Math.round((p.fixed / p.income) * 100)}% of your income.`]);
+    if (!p.isNow && p.left > 0) flags.push(['good', `You finished ${money(p.left)} under your plan. Move it to a goal.`, 'goals']);
+  } else flags.push(['info', 'Set your monthly income in Plan to see what\'s safe to spend.', 'income']);
+  if (last.spent > 0 && p.spent < last.spent && (!p.isNow || d.getDate() >= 25)) flags.push(['good', `You've spent ${money(last.spent - p.spent)} less than last month. Nice!`]);
   if (!flags.length) flags.push(['good', 'Everything is on track 👍']);
   return flags;
 }
 
-function renderInsights(root, ctx) {
+// ---- This month -----------------------------------------------------------------------------
+function heroCard(p, ctx) {
+  if (!p.hasPlan) return card('Set up Safe to spend', { cls: 'hero-setup' },
+    h('p', {}, 'One number that tells you what you can spend without wrecking your month. Three quick steps:'),
+    h('ol', { class: 'steps' },
+      h('li', {}, h('button', { type: 'button', class: 'mini-link', onclick: editIncome }, 'Set your monthly income'), p.planned ? ' ✓' : ''),
+      h('li', {}, h('button', { type: 'button', class: 'mini-link', onclick: () => { tab = 'plan'; ctx.rerender(); } }, 'Add bills & subscriptions'), p.fixedPlan ? ' ✓' : ''),
+      h('li', {}, h('button', { type: 'button', class: 'mini-link', onclick: editSave }, 'Pick a monthly savings amount'), p.save ? ' ✓' : '')));
+  const line = (label, v, cls = '') => [h('dt', {}, label), h('dd', { class: cls }, v)];
+  return h('section', { class: 'card hero ' + (p.left >= 0 ? 'good' : 'over') },
+    h('p', { class: 'eyebrow' }, p.isNow ? 'Safe to spend' : 'Left over'),
+    h('div', { class: 'hero-num' }, money0(p.left)),
+    p.isNow ? h('p', { class: 'hero-sub' }, p.left > 0 ? `about ${money0(Math.floor(p.perDay))}/day for ${p.daysLeft} more day${p.daysLeft === 1 ? '' : 's'} · ${money0(Math.floor(p.week))} this week` : 'You\'ve used this month\'s spending money.') : null,
+    h('dl', { class: 'facts hero-facts' },
+      line('Income', money(p.income)),
+      line('− Bills & subscriptions', money(p.fixed)),
+      line('− Savings', money(p.save)),
+      line('− Spent so far', money(p.flexSpent)),
+      line('= ' + (p.isNow ? 'Safe to spend' : 'Left over'), money(p.left), p.left >= 0 ? 'ok' : 'bad')),
+    h('div', { class: 'btn-row' }, btn('+ Spent', () => editTxn(null), 'primary sm'), btn('Adjust plan', () => { tab = 'plan'; ctx.rerender(); }, 'ghost sm')));
+}
+
+function comingUp() {
+  const bills = billsDueSoon(14);
+  const subs = upcomingSubs(14);
+  if (!bills.length && !subs.length) return null;
+  return card('Coming up (2 weeks)', {},
+    bills.map(billRow),
+    subs.map(s => h('div', { class: 'row compact' }, h('div', { class: 'row-main' }, s.name, h('span', { class: 'muted' }, ` · renews ${relDay(s.next)}`)), h('div', { class: 'amt' }, money(s.amount)))));
+}
+
+function renderMonth(root, ctx) {
   root.append(monthNav(ctx));
-  const s = monthStats(month);
-  const entries = Object.entries(s.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-  const top = entries.slice(0, 7);
-  if (entries.length > 7) top.push(['Everything else', entries.slice(7).reduce((a, [, v]) => a + v, 0)]);
-  const total = top.reduce((a, [, v]) => a + v, 0);
+  const p = safeToSpend(month);
   const grid = h('div', { class: 'grid' });
-  grid.append(card('Where it went', {}, total ? h('div', { class: 'donut-wrap' }, donut(top, total),
-    h('ul', { class: 'donut-legend' }, top.map(([n, v], i) => h('li', {}, h('i', { style: { background: PALETTE[i % PALETTE.length] } }), h('span', {}, n), h('b', {}, money(v)), h('small', { class: 'muted' }, `${Math.round((v / total) * 100)}%`)))))
-    : empty('No spending logged this month yet.')));
+  grid.append(heroCard(p, ctx));
+  if (p.isNow) { const c = comingUp(); if (c) grid.append(c); }
+
+  const cats = [...p.budget.categories];
+  for (const name of Object.keys(p.byCat)) if (!cats.some(c => c.name === name) && !FIXED.includes(name) && name !== 'Savings') cats.push({ name, limit: 0 });
+  cats.sort((a, b) => (p.byCat[b.name] || 0) - (p.byCat[a.name] || 0));
+  grid.append(card('Everyday spending', { action: btn('Edit limits', () => { tab = 'plan'; ctx.rerender(); }, 'ghost sm') },
+    cats.filter(c => c.limit || p.byCat[c.name]).map(c => {
+      const spent = p.byCat[c.name] || 0;
+      return h('div', { class: 'cat' },
+        h('div', { class: 'cat-line' }, h('span', {}, c.name), h('span', { class: c.limit && spent > c.limit ? 'bad' : 'muted' }, `${money(spent)}${c.limit ? ' / ' + money(c.limit) : ''}`)),
+        c.limit ? budgetBar(spent, c.limit) : null);
+    })));
   grid.append(card('Heads-up', {}, h('ul', { class: 'flags' }, insightFlags(month).map(([cls, msg, go]) => h('li', { class: cls }, msg,
-    go === 'goals' ? h('button', { type: 'button', class: 'mini-link', onclick: () => { tab = 'goals'; ctx.rerender(); } }, ' Go to Goals ›')
+    go === 'goals' || go === 'save' ? h('button', { type: 'button', class: 'mini-link', onclick: go === 'save' ? editSave : () => { tab = 'plan'; ctx.rerender(); } }, go === 'save' ? ' Set savings ›' : ' Go to goals ›')
       : go === 'income' ? h('button', { type: 'button', class: 'mini-link', onclick: editIncome }, ' Set income ›') : null)))));
+
+  const months = Array.from({ length: 6 }, (_, i) => addMonths(month + '-01', i - 5).slice(0, 7));
+  const vals = months.map(ym => ({ label: parseYmd(ym + '-01').toLocaleDateString(undefined, { month: 'short' }), value: Math.round(monthStats(ym).spent), highlight: ym === month }));
+  const nz = vals.filter(v => v.value > 0);
+  grid.append(card('Spent per month', {}, barChart(vals, { format: v => money(v).replace(/\.00$/, ''), caption: nz.length ? `Average ${money(nz.reduce((a, v) => a + v.value, 0) / nz.length)} a month. Tap a bar.` : 'Tap a bar for its total.' })));
   root.append(grid);
+}
+
+// ---- Plan -------------------------------------------------------------------------------------
+function renderPlan(root, ctx) {
+  const p = safeToSpend();
+  const b = getBudget();
+  const limits = b.categories.reduce((a, c) => a + (Number(c.limit) || 0), 0);
+  const row = (label, value, onclick, hint) => h('button', { type: 'button', class: 'plan-row', onclick },
+    h('span', {}, h('b', {}, label), hint ? h('small', { class: 'muted' }, hint) : null), h('span', { class: 'plan-val' }, value, ' ›'));
+  const grid = h('div', { class: 'grid' });
+  grid.append(card('Your monthly plan', {},
+    row('Income', p.planned ? money(p.planned) : 'Set', editIncome, 'What you take home in a month'),
+    row('Bills & subscriptions', money(p.fixedPlan), () => document.getElementById('plan-bills')?.scrollIntoView({ behavior: 'smooth' }), (() => { const nb = store.list(BILLS).length, ns = store.list(SUBS).filter(s => s.active !== false).length; return `${nb} bill${nb === 1 ? '' : 's'} · ${ns} subscription${ns === 1 ? '' : 's'}`; })()),
+    row('Savings', p.save ? money(Number(b.save) || 0) : 'Set', editSave, goalsMonthly() ? `Goals need about ${money(Math.ceil(goalsMonthly()))}/month` : 'Set aside before spending'),
+    h('div', { class: 'plan-total' }, h('span', {}, 'Everyday spending money'), h('b', { class: p.flexBudget >= 0 ? 'ok' : 'bad' }, `${money(p.flexBudget)}/mo`)),
+    limits && p.hasPlan && limits > p.flexBudget + 1 ? h('p', { class: 'hint bad' }, `Your category limits add up to ${money(limits)}, more than the ${money(p.flexBudget)} you have for everyday spending.`) : null));
+  grid.append(card('Category limits', { action: h('span', { class: 'btn-row tight' }, btn('+ Category', addCategory, 'ghost sm'), btn('Edit', editBudget, 'ghost sm')) },
+    h('p', { class: 'hint' }, 'Optional guide rails for everyday spending. Safe to spend works without them.'),
+    b.categories.map(c => h('div', { class: 'row compact' }, h('div', { class: 'row-main' }, c.name), h('div', { class: 'amt' }, c.limit ? money(c.limit) : '—')))));
+  const bills = store.list(BILLS).map(x => ({ ...x, due: nextDue(x) })).sort((a, c) => (a.due || '').localeCompare(c.due || ''));
+  const billsCard = card(`Bills · ${money(billsMonthly())}/mo`, { action: addBtn('Add', () => editBill(null)) },
+    bills.length ? bills.map(billRow) : empty('Add rent, phone, car and other bills. "Paid" logs the payment for you.'));
+  billsCard.id = 'plan-bills';
+  grid.append(billsCard);
+  grid.append(subsPanel());
+  const goals = store.list(GOALS).sort((a, c) => (a.deadline || '9999').localeCompare(c.deadline || '9999'));
+  grid.append(card('Savings goals', { action: addBtn('Goal', () => editGoal(null)) },
+    goals.length ? h('div', { class: 'stack' }, goals.map(goalCard)) : empty('No goals yet. Try "Emergency fund: $1,000".')));
+  root.append(grid);
+  const growBox = h('details', { class: 'grow-details', open: growOpen, ontoggle: e => { growOpen = e.target.open; } }, h('summary', {}, '📈 Grow: see how savings add up over time'));
+  renderGrow(growBox);
+  root.append(growBox);
 }
 
 export function render(root, ctx) {
   root.append(pageHead('Money', { actions: [addBtn('Spent', () => editTxn(null))] }));
-  root.append(seg([['budget', 'Budget'], ['spending', 'Spending'], ['bank', 'Bank'], ['bills', 'Bills'], ['goals', 'Goals'], ['grow', 'Grow'], ['insights', 'Insights']], tab, v => { tab = v; ctx.rerender(); }));
-  if (tab === 'budget') renderBudget(root, ctx);
-  else if (tab === 'spending') renderSpending(root, ctx);
-  else if (tab === 'bank') renderBank(root, ctx, catNames());
-  else if (tab === 'bills') renderBills(root);
-  else if (tab === 'grow') renderGrow(root);
-  else if (tab === 'insights') renderInsights(root, ctx);
-  else renderGoals(root);
+  root.append(seg([['month', 'This month'], ['activity', 'Activity'], ['plan', 'Plan']], tab, v => { tab = v; ctx.rerender(); }));
+  if (tab === 'activity') renderActivity(root, ctx);
+  else if (tab === 'plan') renderPlan(root, ctx);
+  else renderMonth(root, ctx);
 }
