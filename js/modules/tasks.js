@@ -83,10 +83,10 @@ export function quickAdd({ key = 'task-quick', due = '', placeholder = 'Add a ta
 
 const byPriority = (a, b) => (b.priority === 'high') - (a.priority === 'high') || (a.priority === 'low') - (b.priority === 'low');
 
-export function render(root, ctx) {
+// Tasks live inside Calendar now (Calendar → To-do). This draws that section.
+export function renderTodo(root, ctx) {
   const today = ymd();
   const all = store.list(COL);
-  root.append(pageHead('Tasks', { actions: [addBtn('New', () => editTask(null))] }));
   root.append(seg([['open', `To do (${all.filter(t => !t.done).length})`], ['done', 'Done']], view, v => { view = v; ctx.rerender(); }));
 
   if (view === 'done') {

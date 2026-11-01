@@ -10,7 +10,7 @@ export const id = 'settings';
 export const title = 'Settings';
 export const glyph = 'settings';
 
-export const DEFAULT_TABS = ['today', 'tasks', 'food', 'money'];
+export const DEFAULT_TABS = ['today', 'calendar', 'food', 'money'];
 const UI_ID = 'settings:ui';
 const ALWAYS_ON = ['today', 'settings', 'more', 'search'];
 

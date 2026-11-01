@@ -12,7 +12,7 @@ let query = '';
 
 // collection → where it lives and how to describe it
 const SOURCES = [
-  { col: 'tasks', mod: 'tasks', label: t => (t.classId ? 'Assignment' : 'Task'), title: x => x.title, text: x => `${x.title} ${x.notes || ''} ${x.list || ''}`, sub: x => (x.due ? `Due ${relDay(x.due)}` : '') + (x.done ? ' · done' : '') },
+  { col: 'tasks', mod: 'calendar', tab: 'todo', label: t => (t.classId ? 'Assignment' : 'Task'), title: x => x.title, text: x => `${x.title} ${x.notes || ''} ${x.list || ''}`, sub: x => (x.due ? `Due ${relDay(x.due)}` : '') + (x.done ? ' · done' : '') },
   { col: 'events', mod: 'calendar', label: () => 'Event', title: x => x.title, text: x => `${x.title} ${x.location || ''} ${x.notes || ''}`, sub: x => x.date ? relDay(x.date) : '' },
   { col: 'notes', mod: 'notes', label: () => 'Note', title: x => x.title || (x.body || '').slice(0, 40), text: x => `${x.title || ''} ${x.body || ''}` },
   { col: 'foods', mod: 'food', tab: 'recipes', label: x => (x.kind === 'snack' ? 'Snack' : 'Recipe'), title: x => x.name, text: x => `${x.name} ${x.ingredients || ''} ${x.notes || ''}` },

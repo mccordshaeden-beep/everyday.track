@@ -9,6 +9,7 @@ import {
 import { LIBRARY } from '../data/recipes.js';
 import { ALLERGENS, DIETS, conflicts, summary as dietSummary, isSet as dietIsSet } from '../data/diet.js';
 import { callFunction, getStatus } from '../sync.js';
+import { fitness } from './workouts.js';
 
 export const id = 'food';
 export const title = 'Food';
@@ -72,6 +73,17 @@ export const missingFor = (r, pk = pantryKeys()) => lines(r.ingredients).filter(
 export const foodPrefs = () => store.get(GOALS_ID) || {};
 const problems = r => conflicts(r, foodPrefs());
 const fits = r => !problems(r).length;
+// Bulk / shred (set on the Workouts page): which recipes suit the goal.
+const goalNow = () => fitness().goal;
+function goalFit(r) {
+  const cal = Number(r.calories) || 0, pro = Number(r.protein) || 0;
+  if (!cal) return 0;
+  if (goalNow() === 'bulk') return cal >= 500 && pro >= 25 ? 2 : cal >= 450 ? 1 : 0;
+  if (goalNow() === 'shred') return cal <= 450 && pro >= 20 ? 2 : pro / cal >= 0.06 ? 1 : 0;
+  return 0;
+}
+const goalSort = (a, b) => goalFit(b) - goalFit(a);
+const goalTag = r => (goalFit(r) === 2 ? h('span', { class: 'tag goal-tag' }, goalNow() === 'bulk' ? '💪 Bulk pick' : '🔥 Shred pick') : null);
 const warnTag = r => { const p = problems(r); return p.length ? h('span', { class: 'tag red' }, '⚠ ' + p.join(', ')) : null; };
 
 export function editFoodSettings() {
@@ -185,7 +197,7 @@ function recipeRow(r, pk) {
     h('div', { class: 'row-main' },
       h('div', { class: 'row-title' }, r.name, r.rating ? h('span', { class: 'stars' }, ' ' + '★'.repeat(Number(r.rating))) : null),
       h('div', { class: 'row-sub' }, recipeMeta(r)),
-      (miss != null || problems(r).length) ? h('div', { class: 'row-meta' }, warnTag(r),
+      (miss != null || problems(r).length || goalTag(r)) ? h('div', { class: 'row-meta' }, warnTag(r), goalTag(r),
         miss != null ? h('span', { class: miss ? 'tag' : 'tag ok-tag' }, miss ? `Need ${miss} item${miss > 1 ? 's' : ''}` : '✓ You have everything') : null) : null),
     icon('right', 18));
 }
@@ -194,6 +206,9 @@ function renderRecipes(root) {
   root.append(seg([['ideas', 'Ideas'], ['find', 'Find more'], ['mine', 'My recipes'], ['make', 'Can I make?'], ['snacks', 'Snacks']], recipeView, v => { recipeView = v; showHidden = false; reRender(); }));
   const pk = pantryKeys();
   const prefs = foodPrefs();
+  if (goalNow() !== 'maintain') root.append(h('div', { class: 'diet-bar' },
+    h('span', { class: 'muted' }, goalNow() === 'bulk' ? '💪 Bulking: higher-calorie, high-protein recipes are shown first' : '🔥 Shredding: lower-calorie, high-protein recipes are shown first'),
+    h('a', { class: 'btn ghost sm', href: '#/workouts' }, 'Change goal')));
   // Only show diet info for people who've set restrictions (the ⚙ button at the top opens Food settings).
   if (dietIsSet(prefs)) root.append(h('div', { class: 'diet-bar' },
     h('span', { class: 'muted' }, '🍽 ' + dietSummary(prefs)),
@@ -214,7 +229,7 @@ function renderRecipes(root) {
       h('span', { class: 'muted' }, `${plural(hidden.length, 'idea')} hidden because of your food settings`),
       btn(showHidden ? 'Hide them' : 'Show them', () => { showHidden = !showHidden; reRender(); }, 'ghost sm')));
     root.append(h('div', { class: 'stack' }, types.map(t => {
-      const group = list.filter(r => r.type === t);
+      const group = list.filter(r => r.type === t).sort(goalSort);
       return group.length ? card(t === 'Snack' ? 'Snacks' : t, {}, group.map(r => recipeRow(r, pk))) : null;
     })));
   } else if (recipeView === 'make') {

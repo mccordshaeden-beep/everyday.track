@@ -3,6 +3,7 @@
 // redraws when data changes.
 
 import { modules, byId } from './modules/index.js';
+import * as calendarMod from './modules/calendar.js';
 import * as store from './store.js';
 import { initSync, onStatus, getStatus, updatePassword } from './sync.js';
 import { h, icon, paintDots, openForm, toast } from './ui.js';
@@ -20,7 +21,8 @@ let pendingRemote = false;
 const visible = () => modules.filter(m => isOn(m.id));
 
 function currentId() {
-  const id = location.hash.replace(/^#\/?/, '').split('?')[0] || 'today';
+  let id = location.hash.replace(/^#\/?/, '').split('?')[0] || 'today';
+  if (id === 'tasks') { calendarMod.setTab('todo'); history.replaceState(null, '', '#/calendar'); id = 'calendar'; } // Tasks moved into Calendar
   return byId[id] && isOn(id) ? id : 'today';
 }
 

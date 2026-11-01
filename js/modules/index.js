@@ -18,5 +18,6 @@ import * as notes from './notes.js';
 import * as settings from './settings.js';
 import * as more from './more.js';
 
-export const modules = [today, search, tasks, calendar, school, food, money, chores, habits, workouts, notes, settings, more];
+// Tasks is part of Calendar now (Calendar → To-do); its module still provides the task functions.
+export const modules = [today, search, calendar, school, food, money, chores, habits, workouts, notes, settings, more];
 export const byId = Object.fromEntries(modules.map(m => [m.id, m]));

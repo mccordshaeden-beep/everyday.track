@@ -2,7 +2,7 @@
 // tasks due on each day.
 import * as store from '../store.js';
 import { h, pageHead, card, empty, addBtn, btn, iconBtn, openForm, ymd, parseYmd, addDays, addMonths, fmtTime, relDay } from '../ui.js';
-import { taskRow } from './tasks.js';
+import { taskRow, renderTodo, editTask } from './tasks.js';
 
 export const id = 'calendar';
 export const title = 'Calendar';
@@ -103,13 +103,20 @@ function monthGrid(ctx) {
       cells));
 }
 
+let tab = 'calendar';
+export function setTab(t) { tab = t === 'todo' ? 'todo' : 'calendar'; }
+
 export function render(root, ctx) {
+  const open = store.list('tasks').filter(t => !t.done && !t.classId).length;
   root.append(pageHead('Calendar', {
-    actions: [
+    actions: tab === 'todo' ? [addBtn('To-do', () => editTask(null))] : [
       btn('Today', () => { selected = ymd(); month = selected.slice(0, 7); ctx.rerender(); }, 'ghost'),
       addBtn('Event', () => editEvent(null)),
     ],
   }));
+  root.append(h('div', { class: 'seg seg-main' }, [['calendar', '📅 Calendar'], ['todo', `☑ To-do${open ? ` (${open})` : ''}`]].map(([v, l]) =>
+    h('button', { type: 'button', class: tab === v ? 'on' : '', onclick: () => { tab = v; ctx.rerender(); } }, l))));
+  if (tab === 'todo') { renderTodo(root, ctx); return; }
 
   const evs = eventsOn(selected);
   const due = store.list('tasks').filter(t => t.due === selected);
