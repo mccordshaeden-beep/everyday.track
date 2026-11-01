@@ -166,10 +166,28 @@ export function parseOFX(text) {
 // rebuild the lines, then look for "date … description … amount" rows. Less exact than QFX/CSV,
 // so the preview always asks you to check.
 const MON = 'jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december';
+const WORKER_URL = new URL('../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+async function openPdf(buf) {
+  let pdfjs;
+  try { pdfjs = await import('../vendor/pdfjs/pdf.min.mjs'); }
+  catch (e) { throw new Error(`PDF reader didn't load (${e?.message || e}). Check your connection, then close and reopen the app.`); }
+  pdfjs.GlobalWorkerOptions.workerSrc = WORKER_URL;
+  const opts = () => ({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false, disableFontFace: true, stopAtErrors: false, useWorkerFetch: false, useWasm: false });
+  const attempt = async () => {
+    const task = pdfjs.getDocument(opts());
+    return Promise.race([task.promise, new Promise((_, rej) => setTimeout(() => { task.destroy?.(); rej(new Error('timed out')); }, 20000))]);
+  };
+  try { return await attempt(); }
+  catch (e) {
+    if (/password/i.test(`${e?.name} ${e?.message}`)) throw e;
+    // Plan B: run the PDF reader on the main thread instead of a background worker
+    // (some browsers block or break module workers).
+    try { globalThis.pdfjsWorker = globalThis.pdfjsWorker || await import('../vendor/pdfjs/pdf.worker.min.mjs'); } catch (e2) { throw new Error(`${e?.message || e}; fallback: ${e2?.message || e2}`); }
+    try { return await attempt(); } catch (e3) { throw new Error(`${e?.name || 'Error'}: ${e?.message || e}; fallback: ${e3?.name || ''} ${e3?.message || e3}`); }
+  }
+}
 async function pdfLines(buf) {
-  const pdfjs = await import('../vendor/pdfjs/pdf.min.mjs');
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(buf), isEvalSupported: false, disableFontFace: true, stopAtErrors: false }).promise;
+  const doc = await openPdf(buf);
   const lines = [];
   for (let n = 1; n <= Math.min(doc.numPages, 60); n++) {
     const tc = await (await doc.getPage(n)).getTextContent();
@@ -405,7 +423,19 @@ async function previewImport(file, catNames) {
       toast('Reading PDF…');
       let lines;
       try { lines = await pdfLines(buf); }
-      catch (e) { toast(/password/i.test(e?.name + e?.message) ? 'That PDF is password-protected. Open it, save a copy without a password, and try again.' : 'Couldn\'t open that PDF.'); return; }
+      catch (e) {
+        if (/password/i.test(`${e?.name} ${e?.message}`)) { toast('That PDF is password-protected. Open it, save a copy without a password, and try again.'); return; }
+        console.error('PDF import failed', e);
+        openSheet({ title: 'Couldn\'t open that PDF', body: [
+          h('p', {}, 'Everyday couldn\'t read this PDF. Things to try:'),
+          h('ol', { class: 'steps' },
+            h('li', {}, 'Close Everyday completely (swipe it away) and open it again, so the newest version loads.'),
+            h('li', {}, 'In the Chase app, open the statement → Share → "Save to Files", then pick that saved copy here.'),
+            h('li', {}, 'Or download the activity as QFX or CSV from chase.com instead. Those are the most reliable.')),
+          h('p', { class: 'hint' }, 'Details (send a screenshot of this to get it fixed):'),
+          h('code', { class: 'err-detail' }, `${String(e?.message || e).slice(0, 400)} · ${file.name || 'file'} · ${Math.round(buf.byteLength / 1024)} KB · ${navigator.userAgent.match(/(iPhone|iPad|Mac|Windows|Android)[^;)]*/)?.[0] || ''} ${navigator.userAgent.match(/Version\/[\d.]+|Chrome\/\d+/)?.[0] || ''}`)] });
+        return;
+      }
       if (!lines.join('').trim()) { toast('That PDF looks like a scan (a picture of the page), so there\'s no text to read. Download QFX/CSV instead.'); return; }
       const res = parseStatementLines(lines);
       rows = res.rows; org = res.bank; pdf = true;
