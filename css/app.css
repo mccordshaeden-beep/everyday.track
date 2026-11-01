@@ -684,3 +684,16 @@ details.guide p { margin-top: 6px; color: var(--muted); font-size: 14.5px; line-
 .ladder-steps li.current button { border-color: var(--accent); background: var(--accent-soft); font-weight: 700; }
 .ladder-steps li.current .lvl-dot { background: var(--accent); color: var(--accent-ink); }
 .tag.goal-tag { background: var(--accent-soft); color: var(--accent); }
+/* habits: calm look, edit button, logs */
+.htile-edit { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--muted); font-size: 13px; line-height: 1; opacity: .75; }
+.log-row { width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; color: inherit; font: inherit; }
+.mood-card.calm .mood-btn { font-size: 13px; font-weight: 600; filter: none; opacity: 1; color: var(--muted); }
+.mood-card.calm .mood-btn.on { color: var(--accent); transform: none; }
+.mood-strip .mood-bar { display: flex; align-items: flex-end; height: 34px; background: var(--field); border-radius: 5px; overflow: hidden; }
+.mood-strip .mood-bar i { display: block; width: 100%; background: var(--accent); opacity: .75; }
+.mood-strip .mood-bar.empty { opacity: .5; }
+.calm-badges summary { font-weight: 650; cursor: pointer; }
+.calm-badges .card { border: 0; padding: 10px 0 0; box-shadow: none; }
+.calm-badges .card .card-head { display: none; }
+.habit-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.look-seg { flex: 0 1 260px; }
