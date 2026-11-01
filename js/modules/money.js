@@ -5,11 +5,12 @@
 // savings, category limits, bills, subscriptions, goals and the Grow calculator).
 import * as store from '../store.js';
 import {
-  h, pageHead, card, empty, seg, addBtn, btn, icon, iconBtn, openForm, bar, barChart, money, toast,
+  h, pageHead, card, empty, seg, addBtn, btn, icon, iconBtn, openForm, openSheet, bar, barChart, money, toast,
   ymd, addDays, addMonths, daysBetween, relDay, parseYmd, fmtMonthYear,
   CYCLES, PER_MONTH, CYCLE_SHORT, nthOccurrence, nextOnOrAfter, countOccurrences,
 } from '../ui.js';
-import { setBankRerender, importBank, legacyCount, migrateLegacy, dropLegacy } from './bank.js';
+import { setBankRerender, importBank, legacyCount, migrateLegacy, dropLegacy, setOnImported, categories as allCats, merchantKey, cleanMerchant, learnedRules, RULES_ID, guessCategory } from './bank.js';
+import { findSubscriptions, dismissSubscription, trackSubscription, priceChanges, waysToSave, subKey } from './moneysmart.js';
 
 export const id = 'money';
 export const title = 'Money';
@@ -165,21 +166,122 @@ function monthNav(ctx) {
 }
 
 // ---- spending ------------------------------------------------------------------------
+const sameMerchant = t => { const k = merchantKey(t.desc || t.note || ''); return k ? store.list(TX).filter(x => x.id !== t.id && x.type === t.type && merchantKey(x.desc || x.note || '') === k) : []; };
+/** Remember "<merchant> → category" for future imports and move matching transactions. */
+export function sortMerchant(t, category, applyAll = true) {
+  const k = merchantKey(t.desc || t.note || '');
+  if (k && t.source === 'bank') {
+    const r = (store.get(RULES_ID) || {}).rules || {};
+    store.save('settings', { rules: { ...r, [k]: category } }, RULES_ID);
+  }
+  store.save(TX, { category, catSet: true }, t.id);
+  let n = 0;
+  if (applyAll) for (const x of sameMerchant(t)) if (x.category !== category) { store.save(TX, { category, catSet: true }, x.id); n++; }
+  return n;
+}
 export function editTxn(t, defaults = {}) {
+  const others = t ? sameMerchant(t).length : 0;
   openForm({
     title: t ? 'Edit' : 'Add spending',
-    values: t || { date: ymd(), type: 'expense', category: catNames()[0], ...defaults },
+    values: t ? { ...t, applyAll: true } : { date: ymd(), type: 'expense', category: catNames()[0], ...defaults },
     fields: [
       { name: 'amount', label: 'Amount ($)', type: 'number', step: '0.01', min: '0', inputmode: 'decimal', required: true, autofocus: true },
       { name: 'type', label: 'Type', type: 'select', options: [['expense', 'Spent'], ['income', 'Money in']] },
-      { name: 'category', label: 'Category', type: 'select', options: [...new Set([...catNames(), 'Bills', 'Subscriptions', 'Savings', 'Income', 'Transfer', 'Other'])], hint: t?.source === 'bank' ? 'Imported from your bank. Future imports from this place will use the category you pick.' : '' },
+      { name: 'category', label: 'Category', type: 'select', options: allCats(catNames()), hint: t?.source === 'bank' ? `From your bank: "${String(t.desc || '').slice(0, 60)}"` : '' },
+      ...(others ? [{ name: 'applyAll', label: `Also change the ${others} other${others === 1 ? '' : 's'} from ${cleanMerchant(t.desc || t.note)} (and remember it)`, type: 'checkbox' }] : []),
       { name: 'note', label: 'What for?', placeholder: 'Chipotle, gas, rent…' },
       { name: 'date', label: 'Date', type: 'date', required: true },
     ],
-    onSubmit: v => { store.save(TX, { ...v, ...(t?.source === 'bank' && v.category !== t.category ? { catSet: true } : {}) }, t?.id); },
+    onSubmit: v => {
+      const { applyAll, ...fields } = v;
+      if (t && v.category !== t.category) {
+        store.save(TX, fields, t.id);
+        const n = sortMerchant({ ...t, ...fields }, v.category, !!applyAll);
+        if (n) toast(`Moved ${n + 1} ${cleanMerchant(t.desc || t.note)} transactions to ${v.category} ✓`);
+        return;
+      }
+      store.save(TX, fields, t?.id);
+    },
     onDelete: t ? () => store.remove(t.id) : null,
   });
 }
+
+// ---- sorting -----------------------------------------------------------------------------------
+const needsSorting = list => list.filter(t => t.category === 'Other' && !t.catSet && t.type !== 'income');
+const QUICK_CATS = ['Groceries', 'Eating out', 'Coffee & treats', 'Gas & transport', 'Shopping', 'Fun', 'Bills', 'Subscriptions', 'Health', 'Personal care', 'Education', 'Gifts & giving', 'Transfer'];
+function sortSheet(list) {
+  const body = h('div', { class: 'stack-sm' });
+  let left = [...list];
+  const draw = () => {
+    if (!left.length) { body.replaceChildren(h('p', {}, '✓ All sorted. Places you sorted will be sorted automatically next time.')); return; }
+    const groups = {};
+    for (const t of left) (groups[merchantKey(t.desc || t.note || '') || t.id] ||= []).push(t);
+    body.replaceChildren(h('p', { class: 'muted' }, `${left.length} to go. Pick where each one belongs; every purchase from the same place moves together.`),
+      ...Object.values(groups).slice(0, 15).map(g => {
+        const t = g[0];
+        const sel = h('select', { 'aria-label': 'Other category', onchange: e => pick(e.target.value) }, h('option', { value: '' }, 'More…'), allCats(catNames()).map(c => h('option', {}, c)));
+        const pick = c => { if (!c) return; sortMerchant(t, c, true); left = left.filter(x => !g.includes(x)); draw(); };
+        return h('div', { class: 'sort-item' },
+          h('div', { class: 'sort-head' }, h('b', {}, cleanMerchant(t.desc || t.note)), h('span', { class: 'muted small' }, `${g.length > 1 ? `${g.length}× · ` : ''}${money(g.reduce((a, x) => a + Number(x.amount), 0))}`)),
+          h('div', { class: 'chip-row' }, QUICK_CATS.map(c => h('button', { type: 'button', class: 'chip', onclick: () => pick(c) }, c)), sel));
+      }));
+  };
+  draw();
+  openSheet({ title: 'Sort your spending', body: [body] });
+}
+
+const WAY_ICON = { limit: '🎯', subs: '🔁' };
+function waysCtx() { const b = getBudget(); return { income: safeToSpend().income, limits: b.categories }; }
+function runWay(w, ctx) {
+  if (!w.action) return;
+  if (w.action === 'subs') { tab = 'plan'; ctx.rerender(); setTimeout(() => document.querySelector('.subs-card')?.scrollIntoView({ behavior: 'smooth' }), 80); return; }
+  if (w.action.startsWith('limit:')) {
+    const name = w.action.slice(6);
+    const b = getBudget();
+    const cur = b.categories.find(c => c.name === name);
+    openForm({
+      title: `Limit for ${name}`,
+      values: { limit: cur?.limit || '' },
+      note: `A monthly limit shows a bar on This month and warns you at 80%. Aim a little below what you spend now.`,
+      fields: [{ name: 'limit', label: 'Monthly limit ($)', type: 'number', step: '1', min: '0', inputmode: 'decimal', autofocus: true }],
+      onSubmit: v => {
+        const cats = cur ? b.categories.map(c => (c.name === name ? { ...c, limit: Number(v.limit) || 0 } : c)) : [...b.categories, { name, limit: Number(v.limit) || 0 }];
+        store.save('settings', { income: b.income, categories: cats }, BUDGET_ID); toast('Limit set ✓');
+      },
+    });
+  }
+}
+function wayRow(w, ctx) {
+  return h('div', { class: 'way' },
+    h('div', { class: 'way-icon' }, w.icon),
+    h('div', { class: 'way-main' }, h('b', {}, w.title), h('p', { class: 'muted small' }, w.detail),
+      w.action ? h('button', { type: 'button', class: 'mini-link', onclick: () => runWay(w, ctx) }, w.action === 'subs' ? 'Review subscriptions ›' : 'Set a limit ›') : null),
+    h('div', { class: 'way-save' }, h('b', {}, `~${money0(w.save)}`), h('small', { class: 'muted' }, '/mo')));
+}
+function waysCard(ctx) {
+  const ways = waysToSave(waysCtx());
+  if (!ways.length) return null;
+  const total = ways.reduce((a, w) => a + w.save, 0);
+  return card('Ways to save', { action: ways.length > 3 ? btn(`See all ${ways.length}`, () => openSheet({ title: 'Ways to save', body: [h('p', { class: 'muted' }, `Up to about ${money0(total)}/month if you did all of these. Based on your last 3 months.`), ...ways.map(w => wayRow(w, ctx))] }), 'ghost sm') : null },
+    h('p', { class: 'muted small' }, `Up to ~${money0(total)}/month, based on your last 3 months.`),
+    ways.slice(0, 3).map(w => wayRow(w, ctx)));
+}
+
+function importSummary(added, skipped) {
+  const by = {};
+  for (const t of added) if (t.amount < 0 && t.category !== 'Transfer') by[t.category] = (by[t.category] || 0) + -t.amount;
+  const top = Object.entries(by).sort((a, b) => b[1] - a[1]);
+  const unsorted = needsSorting(added.map(t => store.get(t.id) ? { id: t.id, ...store.get(t.id) } : null).filter(Boolean));
+  const subs = findSubscriptions();
+  const dlg = openSheet({ title: `Imported ${added.length} transaction${added.length === 1 ? '' : 's'}`, body: [
+    skipped ? h('p', { class: 'muted small' }, `${skipped} were already here and skipped.`) : null,
+    top.length ? h('div', {}, h('p', { class: 'field-label' }, 'Where the money went'), top.slice(0, 8).map(([c, v]) => h('div', { class: 'row compact' }, h('div', { class: 'row-main' }, c), h('div', { class: 'amt' }, money(v))))) : null,
+    unsorted.length ? h('div', { class: 'callout' }, h('p', {}, `🤔 ${unsorted.length} couldn't be sorted automatically.`), btn('Sort them now', () => { dlg.close(); sortSheet(unsorted); }, 'primary sm')) : h('p', {}, '✓ Everything was sorted. Tap any transaction in Activity to move it.'),
+    subs.length ? h('div', { class: 'callout' }, h('p', {}, `🔁 Found ${subs.length} charge${subs.length === 1 ? '' : 's'} that look${subs.length === 1 ? 's' : ''} like a subscription: ${subs.slice(0, 3).map(x => x.name).join(', ')}${subs.length > 3 ? '…' : ''}`),
+      btn('Review', () => { dlg.close(); tab = 'plan'; document.dispatchEvent(new Event('everyday-rerender')); setTimeout(() => document.querySelector('.found-subs')?.scrollIntoView({ behavior: 'smooth' }), 120); }, 'ghost sm')) : null,
+  ].filter(Boolean) });
+}
+setOnImported(importSummary);
 
 function legacyCard(rerender) {
   const n = legacyCount();
@@ -197,7 +299,7 @@ function legacyCard(rerender) {
     h('button', { type: 'button', class: 'mini-link', onclick: () => { if (confirm(`Delete the ${n} locked bank transactions? You can import them again from your bank.`)) { dropLegacy(); rerender(); } } }, 'Forgot it? Delete them and re-import'));
 }
 
-const ACT_FILTERS = [['all', 'All'], ['out', 'Spending'], ['in', 'Money in'], ['bank', 'From bank'], ['manual', 'Typed in']];
+const ACT_FILTERS = [['all', 'All'], ['sort', 'Needs sorting'], ['out', 'Spending'], ['in', 'Money in'], ['bank', 'From bank'], ['manual', 'Typed in']];
 function renderActivity(root, ctx) {
   setBankRerender(ctx.rerender);
   const amount = h('input', { type: 'number', step: '0.01', min: '0', inputmode: 'decimal', placeholder: '$0.00', 'data-fk': 'tx-amt', 'aria-label': 'Amount', required: true });
@@ -216,9 +318,11 @@ function renderActivity(root, ctx) {
   if (lc) root.append(lc);
 
   root.append(monthNav(ctx));
-  root.append(h('div', { class: 'chip-row' }, ACT_FILTERS.map(([v, l]) => h('button', { type: 'button', class: 'chip' + (actFilter === v ? ' on' : ''), onclick: () => { actFilter = v; ctx.rerender(); } }, l))));
   const all = monthStats(month).txns;
-  const txns = all.filter(t => actFilter === 'all' || (actFilter === 'out' && t.type !== 'income') || (actFilter === 'in' && t.type === 'income')
+  const unsorted = needsSorting(all);
+  if (unsorted.length) root.append(h('div', { class: 'callout' }, h('span', {}, `🤔 ${unsorted.length} transaction${unsorted.length === 1 ? '' : 's'} need${unsorted.length === 1 ? 's' : ''} a category`), btn('Sort them', () => sortSheet(unsorted), 'primary sm')));
+  root.append(h('div', { class: 'chip-row' }, ACT_FILTERS.filter(([v]) => v !== 'sort' || unsorted.length).map(([v, l]) => h('button', { type: 'button', class: 'chip' + (actFilter === v ? ' on' : ''), onclick: () => { actFilter = v; ctx.rerender(); } }, v === 'sort' ? `${l} (${unsorted.length})` : l))));
+  const txns = all.filter(t => actFilter === 'all' || (actFilter === 'sort' && unsorted.includes(t)) || (actFilter === 'out' && t.type !== 'income') || (actFilter === 'in' && t.type === 'income')
       || (actFilter === 'bank' && t.source === 'bank') || (actFilter === 'manual' && t.source !== 'bank'))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.created || '').localeCompare(a.created || ''));
   const out = all.filter(t => t.type !== 'income' && t.category !== 'Transfer').reduce((a, t) => a + (Number(t.amount) || 0), 0);
@@ -227,11 +331,11 @@ function renderActivity(root, ctx) {
   if (!txns.length) { root.append(empty(all.length ? 'Nothing matches this filter.' : 'Nothing yet this month. Type spending above, or import a file from your bank.')); return; }
   for (const d of [...new Set(txns.map(t => t.date))]) {
     root.append(card(relDay(d), {}, txns.filter(t => t.date === d).map(t => h('div', { class: 'row' + (t.category === 'Transfer' ? ' muted' : ''), onclick: () => editTxn(t) },
-      h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, t.note || t.desc || t.category),
-        h('div', { class: 'row-meta' }, h('span', { class: 'tag' }, t.category === 'Transfer' ? 'Transfer · not counted' : t.category), t.source === 'bank' ? h('span', { class: 'row-sub' }, `🏦 ${t.account || 'Bank'}`) : null)),
+      h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, (t.source === 'bank' && t.note === t.desc ? cleanMerchant(t.desc) : t.note) || t.desc || t.category),
+        h('div', { class: 'row-meta' }, h('span', { class: 'tag' + (t.category === 'Other' && !t.catSet && t.type !== 'income' ? ' warn-tag' : '') }, t.category === 'Transfer' ? 'Transfer · not counted' : t.category), t.source === 'bank' ? h('span', { class: 'row-sub' }, `🏦 ${t.account || 'Bank'}`) : null)),
       h('div', { class: t.type === 'income' ? 'amt in' : 'amt' }, (t.type === 'income' ? '+' : '') + money(t.amount))))));
   }
-  root.append(h('p', { class: 'hint' }, 'Tap anything to change its category or delete it. Transfers and card payments aren\'t counted, so nothing is counted twice.'));
+  root.append(h('p', { class: 'hint' }, 'Tap anything to move it to another category (you can move everything from the same place at once) or delete it. Transfers and card payments aren\'t counted, so nothing is counted twice.'));
 }
 
 // ---- subscriptions ----------------------------------------------------------------------
@@ -263,12 +367,15 @@ function editSub(s) {
       { name: 'started', label: 'When it started', type: 'date', hint: 'The first time you paid. Used to count what you\'ve spent on it.' },
       { name: 'nextDate', label: 'Next payment date', type: 'date', hint: 'Leave blank to count forward from the start date.' },
       { name: 'category', label: 'Category', suggestions: ['Subscriptions', 'Streaming', 'Music', 'School', 'Phone', 'Software', 'Fitness'] },
-      { name: 'active', label: 'Active (uncheck if paused or canceled)', type: 'checkbox' },
-      { name: 'notes', label: 'Notes', type: 'textarea', rows: 2, placeholder: 'Which card, how to cancel, free trial ends…' },
+      { name: 'canceling', label: 'I want to cancel this (remind me before it renews)', type: 'checkbox' },
+      { name: 'cancelBy', label: 'Free trial ends / cancel by (optional)', type: 'date', hint: 'You\'ll get a reminder 2 days before.' },
+      { name: 'active', label: 'Active (uncheck once it\'s canceled)', type: 'checkbox' },
+      { name: 'notes', label: 'Notes', type: 'textarea', rows: 2, placeholder: 'Which card, how to cancel…' },
     ],
     onSubmit: v => {
       if (!v.started && !v.nextDate) { toast('Add a start date or next payment date'); return false; }
-      store.save(SUBS, v, s?.id);
+      if (s && s.active !== false && v.active === false) { v.canceledOn = ymd(); toast(`Nice! ${money(perMonth(v) * 12)} a year saved 🎉`); }
+      store.save(SUBS, { ...v, reviewed: ymd() }, s?.id);
     },
     onDelete: s ? () => store.remove(s.id) : null,
   });
@@ -286,12 +393,29 @@ function subRow(s) {
         s.started ? `Since ${fmtMonthYear(s.started)}` : '',
         s.started && paidSoFar ? ` · ${money(paidSoFar)} so far` : ''),
       h('div', { class: 'row-meta' },
-        s.active === false ? h('span', { class: 'tag' }, 'Paused') :
+        s.active !== false && s.cancelBy && s.cancelBy >= ymd() ? h('span', { class: 'tag red' }, `Cancel by ${relDay(s.cancelBy)}`) : null,
+        s.active !== false && s.canceling ? h('a', { class: 'tag red', href: `https://www.google.com/search?q=${encodeURIComponent('how to cancel ' + s.name + ' subscription')}`, target: '_blank', rel: 'noopener', onclick: e => e.stopPropagation() }, 'How to cancel ↗') : null,
+        s.active === false ? h('span', { class: 'tag' }, s.canceledOn ? `Canceled ${relDay(s.canceledOn)}` : 'Paused') :
           next ? h('span', { class: days <= 3 ? 'tag red' : 'tag' },
             days === 0 ? 'Next payment today' : `Next: ${relDay(next)}${days > 1 && days < 7 ? ` (${days} days)` : ''}`) : null)),
     h('div', { class: 'amt' },
       money(mo), h('small', {}, '/mo'),
       s.cycle && s.cycle !== 'monthly' ? h('div', { class: 'amt-sub' }, `${money(s.amount)}/${CYCLE_SHORT[s.cycle]}`) : null));
+}
+
+function foundSubs() {
+  const found = findSubscriptions();
+  const changes = priceChanges();
+  if (!found.length && !changes.length) return null;
+  return h('div', { class: 'found-subs' },
+    changes.map(c => h('div', { class: 'callout' },
+      h('span', {}, `📈 ${c.sub.name} went up from ${money(c.was)} to ${money(c.now)}.`),
+      h('span', { class: 'btn-row tight' }, btn('Update price', () => store.save(SUBS, { amount: c.now }, c.sub.id), 'ghost sm'), btn('Cancel it?', () => editSub({ ...c.sub, canceling: true }), 'ghost sm')))),
+    found.length ? [h('p', { class: 'field-label' }, `Found in your bank (${found.length})`),
+      found.map(f => h('div', { class: 'row found-row' },
+        h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, f.name), h('div', { class: 'row-sub' }, `${money(f.amount)} ${f.cycle} · charged ${f.count}× · next about ${relDay(f.next)}`),
+          f.raisedFrom ? h('div', { class: 'row-meta' }, h('span', { class: 'tag red' }, `📈 Price went up from ${money(f.raisedFrom)}`)) : null),
+        h('span', { class: 'btn-row tight' }, btn('Track', () => { trackSubscription(f); toast(`Tracking ${f.name} ✓`); }, 'primary sm'), btn('Not one', () => dismissSubscription(f.key), 'ghost sm'))))] : null);
 }
 
 function subsPanel() {
@@ -305,7 +429,8 @@ function subsPanel() {
         h('div', {}, h('b', {}, money(mo)), h('span', {}, 'total per month')),
         h('div', {}, h('b', {}, money(mo * 12)), h('span', {}, 'per year')),
         h('div', {}, h('b', {}, String(active.length)), h('span', {}, 'active'))),
-      active.length ? active.map(subRow) : empty('Add your subscriptions to see when each started, when the next payment is, and what each costs per month.')),
+      foundSubs(),
+      active.length ? active.map(subRow) : empty('Add your subscriptions, or import a bank statement and they\'ll be found for you.')),
     paused.length ? card('Paused or canceled', {}, paused.map(subRow)) : null);
 }
 
@@ -556,8 +681,10 @@ function heroCard(p, ctx) {
 function comingUp() {
   const bills = billsDueSoon(14);
   const subs = upcomingSubs(14);
-  if (!bills.length && !subs.length) return null;
+  const cancel = store.list(SUBS).filter(s => s.active !== false && ((s.cancelBy && s.cancelBy >= ymd() && daysBetween(ymd(), s.cancelBy) <= 14) || (s.canceling && nextRenewal(s) && daysBetween(ymd(), nextRenewal(s)) <= 14)));
+  if (!bills.length && !subs.length && !cancel.length) return null;
   return card('Coming up (2 weeks)', {},
+    cancel.map(s => h('div', { class: 'row compact cancel-row', onclick: () => editSub(s) }, h('div', { class: 'row-main' }, `✂️ Cancel ${s.name}`, h('span', { class: 'muted' }, ` before ${relDay(s.cancelBy && s.cancelBy >= ymd() ? s.cancelBy : nextRenewal(s))}`)), h('div', { class: 'amt' }, money(s.amount)))),
     bills.map(billRow),
     subs.map(s => h('div', { class: 'row compact' }, h('div', { class: 'row-main' }, s.name, h('span', { class: 'muted' }, ` · renews ${relDay(s.next)}`)), h('div', { class: 'amt' }, money(s.amount)))));
 }
@@ -579,6 +706,7 @@ function renderMonth(root, ctx) {
         h('div', { class: 'cat-line' }, h('span', {}, c.name), h('span', { class: c.limit && spent > c.limit ? 'bad' : 'muted' }, `${money(spent)}${c.limit ? ' / ' + money(c.limit) : ''}`)),
         c.limit ? budgetBar(spent, c.limit) : null);
     })));
+  if (p.isNow) { const w = waysCard(ctx); if (w) grid.append(w); }
   grid.append(card('Heads-up', {}, h('ul', { class: 'flags' }, insightFlags(month).map(([cls, msg, go]) => h('li', { class: cls }, msg,
     go === 'goals' || go === 'save' ? h('button', { type: 'button', class: 'mini-link', onclick: go === 'save' ? editSave : () => { tab = 'plan'; ctx.rerender(); } }, go === 'save' ? ' Set savings ›' : ' Go to goals ›')
       : go === 'income' ? h('button', { type: 'button', class: 'mini-link', onclick: editIncome }, ' Set income ›') : null)))));
@@ -613,6 +741,12 @@ function renderPlan(root, ctx) {
   billsCard.id = 'plan-bills';
   grid.append(billsCard);
   grid.append(subsPanel());
+  const rules = Object.entries(learnedRules()).sort((a, c) => a[0].localeCompare(c[0]));
+  if (rules.length) grid.append(card(`Sorting rules (${rules.length})`, {},
+    h('p', { class: 'hint' }, 'Made when you move a transaction. New imports from these places go straight to the right category.'),
+    h('details', {}, h('summary', { class: 'mini-link' }, 'Show rules'),
+      rules.map(([k, c]) => h('div', { class: 'row compact' }, h('div', { class: 'row-main' }, k.replace(/\b[a-z]/g, x => x.toUpperCase()), h('span', { class: 'muted' }, ` → ${c}`)),
+        h('button', { type: 'button', class: 'btn ghost sm', onclick: () => { const r = (store.get(RULES_ID) || {}).rules || {}; store.save('settings', { rules: { ...r, [k]: '' } }, RULES_ID); for (const t of store.list(TX).filter(t => t.source === 'bank' && merchantKey(t.desc || t.note || '') === k)) store.save(TX, { catSet: false }, t.id); toast('Rule removed'); } }, 'Remove'))))));
   const goals = store.list(GOALS).sort((a, c) => (a.deadline || '9999').localeCompare(c.deadline || '9999'));
   grid.append(card('Savings goals', { action: addBtn('Goal', () => editGoal(null)) },
     goals.length ? h('div', { class: 'stack' }, goals.map(goalCard)) : empty('No goals yet. Try "Emergency fund: $1,000".')));

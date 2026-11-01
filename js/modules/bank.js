@@ -66,7 +66,7 @@ async function recordId(text) {
 export const legacyCount = () => (store.get(VAULT_ID)?.salt ? store.list(COL).length : 0);
 const toTx = (r, extra = {}) => ({
   date: r.date, amount: Math.abs(Number(r.amount) || 0), type: Number(r.amount) > 0 ? 'income' : 'expense',
-  category: r.category || 'Other', note: r.note || r.desc, desc: r.desc, account: r.account || '', source: 'bank', catSet: !!r.catSet, ...extra,
+  category: r.category || 'Other', note: r.note || cleanMerchant(r.desc), desc: r.desc, account: r.account || '', source: 'bank', catSet: !!r.catSet, ...extra,
 });
 /** Unlock the old vault once and move everything into the normal list. */
 export async function migrateLegacy(password) {
@@ -294,21 +294,48 @@ export function detectColumns(rows) {
 }
 
 // ---- categories --------------------------------------------------------------------------------
+// Every import is sorted into these. Your own budget categories are added to the list too.
+export const MASTER_CATS = ['Groceries', 'Eating out', 'Coffee & treats', 'Gas & transport', 'Shopping', 'Fun', 'Subscriptions', 'Bills',
+  'Health', 'Personal care', 'Education', 'Travel', 'Gifts & giving', 'Fees & interest', 'Cash', 'Income', 'Savings', 'Transfer', 'Other'];
+// Checked in order; the first match wins.
 const RULES = [
-  ['Transfer', /transfer|xfer|payment thank you|autopay payment|online payment|credit card payment|card pmt|crcardpmt|to savings|from savings|zelle to|venmo cashout/i],
-  ['Income', /payroll|direct dep|dir dep|salary|paycheck|interest paid|refund/i],
-  ['Groceries', /walmart|smith'?s|kroger|costco|winco|trader joe|aldi|sprouts|harmons|whole foods|safeway|albertsons|grocery|market|sam'?s club|fresh market|lees market|maceys|macey'?s/i],
-  ['Eating out', /mcdonald|chick-?fil|taco bell|wendy|subway|chipotle|starbucks|cafe rio|cubby|in-?n-?out|crumbl|swig|sodalicious|fiiz|doordash|uber ?eats|grubhub|restaurant|grill|pizza|burger|coffee|panda express|jimmy john|arby|sonic|dutch bros|cafe|diner|kitchen|bbq/i],
-  ['Gas & transport', /shell|chevron|maverik|sinclair|exxon|conoco|phillips 66|7-?eleven|circle k|holiday|fuel|gas station|uber(?! ?eats)|lyft|parking|uta |bus |toll/i],
-  ['Subscriptions', /netflix|spotify|hulu|disney|apple\.com\/bill|icloud|youtube|prime video|amazon prime|hbo|max\.com|paramount|peacock|audible|chatgpt|openai|adobe|microsoft 365|xbox|playstation|nintendo|patreon/i],
-  ['Bills', /rent|apartment|utilit|power|rocky mountain power|dominion|enbridge|water|sewer|verizon|t-?mobile|at&t|xfinity|comcast|internet|insurance|geico|progressive|state farm|allstate|loan|tuition|suu /i],
-  ['Shopping', /amazon|amzn|target|best buy|etsy|ebay|shein|temu|kohl|old navy|ross|tj ?maxx|marshalls|nike|walgreens|cvs|dollar tree|five below/i],
-  ['Fun', /cinema|theater|theatre|movie|steam|ticketmaster|bowling|golf|concert|arcade|spotify concerts/i],
+  ['Transfer', /\btransfer\b|xfer|payment thank you|autopay payment|online payment|credit card payment|card pmt|crcardpmt|epay|to savings|from savings|to checking|from checking|zelle (to|from)|venmo (cashout|cash out|transfer)|cash app transfer|apple cash (transfer|sent)|mobile deposit/i],
+  ['Fees & interest', /overdraft|nsf fee|insufficient funds|late fee|returned item|monthly (service|maintenance) fee|service charge|atm fee|foreign transaction|interest charge|finance charge|cash advance fee|annual fee/i],
+  ['Income', /payroll|direct dep|dir dep|salary|paycheck|ppd id|interest paid|interest earned|refund|reimburse|cashback|cash back reward|tax ref|irs treas|venmo from|zelle from/i],
+  ['Cash', /\batm\b|cash withdrawal|withdrawal at/i],
+  ['Coffee & treats', /starbucks|dutch bros|swig|sodalicious|fiiz|crumbl|dunkin|coffee|caribou|scooters|krispy|baskin|cold stone|dairy queen|yogurt|boba|tea house|smoothie|jamba|nothing bundt|insomnia cookies|dirty dough|cookie/i],
+  ['Eating out', /mcdonald|chick-?fil|taco bell|wendy|subway|chipotle|cafe rio|cubby|in-?n-?out|doordash|dd \*|uber ?eats|grubhub|postmates|restaurant|grill|pizza|burger|panda express|jimmy john|arby|sonic|cafe|diner|kitchen|bbq|cafe zupas|zupas|costa vida|bajio|raising cane|cane'?s|wingstop|five guys|jack in the box|del taco|carl'?s jr|popeyes|kfc|culver|olive garden|applebee|chili'?s|red robin|buffalo wild|texas roadhouse|denny|ihop|noodles|panera|sushi|thai|pho|taqueria|tst\*|toast/i],
+  ['Groceries', /walmart grocery|walmart super|wal-?mart|smith'?s|kroger|costco|winco|trader joe|aldi|sprouts|harmons|whole foods|safeway|albertsons|grocery|supermarket|sam'?s club|fresh market|lees market|maceys|macey'?s|fry'?s food|instacart|food 4 less|natural grocers|lins market/i],
+  ['Gas & transport', /shell|chevron|maverik|sinclair|exxon|mobil\b|conoco|phillips 66|7-?eleven|circle k|holiday|fuel|gas station|\buber\b(?! ?eats)|lyft|parking|park mobile|parkmobile|uta |\bbus\b|toll|jiffy lube|oil change|car wash|autozone|o'?reilly|discount tire|dmv|tesla supercharg/i],
+  ['Subscriptions', /netflix|spotify|hulu|disney ?\+|disneyplus|apple\.com\/bill|itunes|icloud|youtube|google \*?storage|google one|prime video|amazon prime|primevideo|hbo|max\.com|paramount|peacock|audible|kindle unlimited|chatgpt|openai|claude\.ai|anthropic|adobe|microsoft ?365|xbox|playstation|psn|nintendo|patreon|twitch|crunchyroll|dropbox|canva|grammarly|duolingo|nyt|new york times|wsj|planet fitness|crunch fitness|gym|onlyfans|siriusxm|ring\.com|life360|bumble|tinder|hinge/i],
+  ['Bills', /\brent\b|apartment|property mgmt|utilit|power|rocky mountain power|dominion|enbridge|water|sewer|garbage|verizon|t-?mobile|at&t|mint mobile|visible|cricket|xfinity|comcast|spectrum|cox comm|google fi|internet|insurance|geico|progressive|state farm|allstate|lemonade|loan|navient|nelnet|mohela|sallie|car payment|auto pay(?!ment thank)/i],
+  ['Education', /tuition|\bsuu\b|southern utah|university|college|bookstore|chegg|pearson|mcgraw|cengage|quizlet|course hero|coursera|udemy|textbook/i],
+  ['Health', /pharmacy|cvs|walgreens|rite aid|intermountain|clinic|medical|dental|dentist|orthodont|vision|optometr|hospital|urgent care|labcorp|quest diag|copay|health/i],
+  ['Personal care', /great clips|supercuts|sport clips|salon|barber|ulta|sephora|nail|spa\b|massage|bath & body/i],
+  ['Travel', /airline|delta air|united air|american air|southwest|frontier|allegiant|spirit air|jetblue|hotel|marriott|hilton|hyatt|airbnb|vrbo|expedia|booking\.com|enterprise rent|hertz|avis|budget rent|national car/i],
+  ['Gifts & giving', /donation|charity|church|tithing|gofundme|red cross|giving|gift card|1-800-flowers|edible arrangements/i],
+  ['Fun', /cinema|theater|theatre|movie|fandango|steam|epic games|ticketmaster|stubhub|seatgeek|eventbrite|bowling|golf|top golf|concert|arcade|museum|zoo|trampoline|escape room|ski|resort|lagoon|game ?stop|board game/i],
+  ['Shopping', /amazon|amzn|target|best buy|etsy|ebay|shein|temu|kohl|old navy|gap\b|ross|tj ?maxx|marshalls|nike|adidas|dollar tree|five below|home depot|lowe'?s|ikea|hobby lobby|michaels|walmart\.com|apple store|deseret industries|\bdi\b|goodwill|h&m|zara|uniqlo|urban outfitters|american eagle|hollister|scheels|rei\b|dick'?s sporting|academy sports|bed bath|wayfair|joann/i],
 ];
-const merchantKey = d => String(d).toLowerCase().replace(/\d{3,}/g, ' ').replace(/[^a-z& ]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ');
+/** "Card Purchase 12/01 Winco Foods #22 St George UT" → "Winco Foods" */
+export function cleanMerchant(desc) {
+  let d = String(desc || '')
+    .replace(/^(recurring )?(debit |visa |mc )?(card )?(purchase|pymt|payment)( with pin| authorized on \d{1,2}\/\d{1,2})?\s*/i, '')
+    .replace(/^(pos|ach|checkcard|chkcard|dbt|debit|withdrawal|purchase|pre-?auth(orized)?|online|web|ppd|ccd)(\s+(purchase|debit|credit|pmt|payment|transaction))?\s+/i, '')
+    .replace(/^\d{1,2}\/\d{1,2}(\/\d{2,4})?\s+/, '')
+    .replace(/^(sq|tst|sp|pp|paypal|py|dd|ic|in|bt|fs|par|pos)\s?\*\s?/i, '')
+    .replace(/\s+(#|no\.?\s?)?\d{2,}.*$/i, '')                    // store numbers and everything after
+    .replace(/\s+(salt lake city|west valley city|cedar city|st\.? george|las vegas|north las vegas|san francisco|los angeles|new york|san jose|salt lake)\s+[a-z]{2}\.?\s*$/i, '')
+    .replace(/\s+[a-z.'-]+(?:\s+[a-z.'-]+)?\s+(?:ut|az|nv|ca|id|co|wy|tx|ny|wa|or|fl|nm|ma|ga|il|mn|nj|pa|oh|va|nc|mi|de)\.?\s*$/i, '') // "St George UT"
+    .replace(/\s+(ppd|ccd|web) id:?.*$/i, '')
+    .replace(/[*#]+/g, ' ').replace(/\.com\b/i, '').replace(/\s+(usa|us|inc|llc|co|corp|ltd)\.?$/i, '').replace(/\s{2,}/g, ' ').trim();
+  if (d.length < 2) d = String(desc || '').trim();
+  return d.split(' ').slice(0, 4).join(' ').toLowerCase().replace(/(^|\s)[a-z]/g, c => c.toUpperCase()).replace(/\b(Llc|Inc|Co)\b\.?/g, '').trim();
+}
+const merchantKey = d => cleanMerchant(d).toLowerCase().replace(/[^a-z0-9& ]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 2).join(' ');
 
 function categories(catNames) {
-  return [...new Set([...catNames, 'Bills', 'Subscriptions', 'Income', 'Transfer', 'Other'])];
+  return [...new Set([...catNames, ...MASTER_CATS])];
 }
 function guessCategory(desc, amount, catNames, learned) {
   const k = merchantKey(desc);
@@ -317,15 +344,18 @@ function guessCategory(desc, amount, catNames, learned) {
     if (!re.test(desc)) continue;
     if (cat === 'Transfer') return 'Transfer';
     if (cat === 'Income') return amount > 0 ? 'Income' : 'Other';
-    if (amount > 0) return 'Income';
-    return catNames.includes(cat) || ['Bills', 'Subscriptions'].includes(cat) ? cat : 'Other';
+    if (amount > 0) return 'Income'; // money back from a store = refund
+    return cat;
   }
   return amount > 0 ? 'Income' : 'Other';
 }
 /** Categories you picked yourself are remembered per merchant and reused next import. */
-function learnedRules() {
+export const RULES_ID = 'settings:sortrules'; // { rules: { merchantKey: category } }
+export function learnedRules() {
   const out = {};
   for (const t of store.list(TX).filter(t => t.source === 'bank' && t.catSet).sort((a, b) => (a.date || '').localeCompare(b.date || ''))) out[merchantKey(t.desc || t.note)] = t.category;
+  Object.assign(out, (store.get(RULES_ID) || {}).rules || {}); // rules you saved on purpose win
+  for (const [k, v] of Object.entries(out)) if (!v) delete out[k];  // removed rules
   return out;
 }
 
@@ -480,14 +510,17 @@ async function previewImport(file, catNames) {
     actions: [{ label: 'Import', cls: 'primary', onClick: async () => {
       const inc = parsed.filter(t => t.include);
       let added = 0, skipped = 0;
+      const addedList = [];
       for (const t of inc) {
         const id = await recordId(t.sig);
         if (existing.has(id) || (store.known(id) && !store.get(id))) { skipped++; continue; }
         store.save(TX, toTx({ date: t.date, amount: t.amount, desc: t.desc, category: t.category, catSet: !!t.catSet, account: account.value.trim() }), id);
         existing.add(id);
         added++;
+        addedList.push({ ...t, id });
       }
       toast(`Imported ${added} transaction${added === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} already here` : ''}`);
+      if (added) setTimeout(() => onImported(addedList, skipped), 300);
       rr();
     } }],
   });
@@ -495,5 +528,8 @@ async function previewImport(file, catNames) {
 
 // ---- used by Money → Activity --------------------------------------------------------------
 export const setBankRerender = fn => { rr = fn; };
+let onImported = () => {};
+export const setOnImported = fn => { onImported = fn; };
+export { guessCategory, categories };
 export const importBank = catNames => showInstructions(catNames);
 export { merchantKey };

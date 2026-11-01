@@ -909,3 +909,21 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .recipe-group > summary .muted { margin-left: auto; }
 .section-title { font-size: 17px; margin: 18px 2px 8px; }
 .diet-line { margin: 4px 2px; }
+
+/* ---------- money: sorting, ways to save, subscriptions ---------- */
+.callout { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin: 8px 0; border-radius: 12px; background: color-mix(in srgb, var(--accent) 10%, var(--card)); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); font-size: 14px; }
+.callout p { margin: 0; }
+.sort-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sort-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.sort-item .chip { font-size: 13px; padding: 5px 10px; }
+.sort-item select { width: auto; padding: 5px 8px; font-size: 13px; border-radius: 99px; }
+.tag.warn-tag { background: color-mix(in srgb, var(--hc-yellow) 25%, var(--card)); color: var(--ink); }
+.way { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); align-items: start; }
+.way-icon { font-size: 22px; line-height: 1.2; }
+.way-main p { margin: 3px 0 4px; line-height: 1.45; }
+.way-save { text-align: right; white-space: nowrap; }
+.way-save b { color: var(--hc-green); font-size: 16px; }
+.found-subs { margin: 6px 0 10px; }
+.found-row { background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 10px; padding-left: 8px; padding-right: 8px; }
+.cancel-row .row-main { color: var(--hc-red); font-weight: 600; }
+.flags .mini-link { margin-left: 6px; }

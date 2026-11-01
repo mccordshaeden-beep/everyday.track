@@ -7,7 +7,7 @@
 
 import * as store from './store.js';
 import { getClient, getStatus, onStatus, callFunction } from './sync.js';
-import { ymd, addDays, parseYmd, fmtTime, money } from './ui.js';
+import { ymd, addDays, parseYmd, fmtTime, money, daysBetween, relDay } from './ui.js';
 import { eventsOn } from './modules/calendar.js';
 import { nextDue, nextRenewal } from './modules/money.js';
 import { myChores as chores, dueDate } from './modules/chores.js';
@@ -94,6 +94,12 @@ function thingsOn(d, isToday) {
   }
   for (const b of store.list('bills')) { const due = nextDue(b); if (due === d || (isToday && due && due < d)) parts.push(`${b.name} ${due < d ? 'overdue' : 'due'}${b.amount ? ` (${money(b.amount)})` : ''}`); }
   for (const s of store.list('subs')) if (s.active !== false && nextRenewal(s) === d) parts.push(`${s.name} renews (${money(s.amount)})`);
+  for (const s of store.list('subs')) {
+    if (s.active === false) continue;
+    const r = nextRenewal(s);
+    if (s.cancelBy && s.cancelBy >= d && daysBetween(d, s.cancelBy) <= 2) parts.push(`Cancel ${s.name} by ${s.cancelBy === d ? 'today' : relDay(s.cancelBy)}`);
+    else if (s.canceling && r && r >= d && daysBetween(d, r) <= 2) parts.push(`Cancel ${s.name} before it renews ${r === d ? 'today' : relDay(r)}`);
+  }
   const ch = chores().filter(c => (isToday ? dueDate(c) <= d : dueDate(c) === d) && c.lastDone !== d);
   if (ch.length) parts.push(ch.length === 1 ? `Clean: ${ch[0].name}` : `${plural(ch.length, 'chore')} to do`);
   return parts;

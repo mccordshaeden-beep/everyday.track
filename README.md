@@ -242,6 +242,13 @@ The tab has three sections:
 - **Activity:** every transaction in one list, whether typed in, imported from the bank, or money in. Filter by All / Spending / Money in / From bank / Typed in. Import bank files from here. Transfers and card payments aren't counted.
 - **Plan:** income, savings each month (with what your goals need), the everyday-spending money that leaves, optional category limits, bills, subscriptions, goals, and the Grow calculator.
 
+### Sorting, savings tips and subscriptions
+
+- **Sorting:** imports are sorted into 19 categories using a large list of stores and merchants, and messy bank text gets cleaned up ("Card Purchase 12/01 WINCO FOODS #22 ST GEORGE UT" becomes "Winco Foods"). Anything the app can't place is marked **Needs sorting**, with a quick one-tap sorter.
+- **Re-sorting:** move any transaction to a different category, optionally along with every other purchase from the same place. The app remembers that as a sorting rule for future imports (rules are listed under Plan → Sorting rules, where you can remove them).
+- **Ways to save** (This month): looks at your last 3 months and suggests cuts, each with an estimated monthly saving. It covers eating out, delivery apps, drinks and treats, bank fees, small purchases, a spike in shopping, overlapping streaming services, subscriptions you haven't reviewed, and categories that keep going over their limit.
+- **Subscriptions:** charges that repeat (same place, about the same amount, every week, month, quarter or year) show up under Plan → Subscriptions as "Found in your bank", with Track / Not one buttons and a flag when the price went up. You can mark a subscription "I want to cancel this" (with a "How to cancel" link) or give it a free-trial / cancel-by date. Reminders appear in Coming up and in your daily reminder 2 days before.
+
 ## Security
 
 - **Row Level Security** on every table: each account can only read its own rows, plus whatever someone deliberately shares with it.
