@@ -212,6 +212,15 @@ Notes save as you type and are private to your account.
 
 The first line of the note becomes the title, and Apple checklist and bullet marks are converted.
 
+## Money tab: Grow and Insights
+
+- **Budget tab:** shows Income, Left over and Savings rate. Left over is income minus spending, subscriptions, and bills still due this month. Category bars turn amber at 80% and red when you're over. "+ Category" adds a category quickly.
+- **Goals tab:** goals can be added to or withdrawn from.
+- **Grow tab:** a compound-growth planner comparing checking (0%), high-yield savings (~4%) and an index fund (~7%). The rates are editable assumptions. "Use my monthly leftover" fills in your real leftover, and there's a "common order for extra money" guide. This is general education, not advice.
+- **Insights tab:** a donut chart of spending by category, plus heads-up flags: over budget, at 80%, spending faster than the month is passing, up 25%+ from last month, budgets bigger than income, a low savings rate, subscriptions taking 10%+ of income, and money left to move into a goal.
+
+These were adapted from a standalone "Money Planner" module. They use the app's own synced storage instead of its separate tables, so they're covered by the same sync, two-step login and security rules.
+
 ## Security
 
 - **Row Level Security** on every table: each account can only read its own rows, plus whatever someone deliberately shares with it.
