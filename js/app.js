@@ -137,7 +137,18 @@ setInterval(() => {
 }, 60_000);
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('./sw.js').catch(err => console.warn('Service worker failed', err));
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(reg => {
+    // Check for a new version whenever the app comes back to the front.
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(err => console.warn('Service worker failed', err));
+  // A new version took over: reload once so every screen uses it (not while you're typing).
+  let reloaded = false;
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    const go = () => { if (!reloaded && !busyTyping()) { reloaded = true; location.reload(); } };
+    go(); if (!reloaded) document.addEventListener('sheet-closed', go);
+  });
   // Tapping a notification while the app is open: go to the right screen.
   navigator.serviceWorker.addEventListener('message', e => {
     if (e.data?.type === 'open' && e.data.hash) location.hash = e.data.hash;

@@ -6,7 +6,7 @@
 // new version, close and reopen the app (sometimes twice) to see it.
 // Bump CACHE when you add or rename files so old copies get cleaned up.
 
-const CACHE = 'everyday-v20';
+const CACHE = 'everyday-v21';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/login.js', 'js/reminders.js', 'js/share.js', 'js/lock.js', 'js/vault.js', 'js/security.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/config.js',
@@ -35,16 +35,29 @@ self.addEventListener('fetch', e => {
 
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const cached = await cache.match(req, { ignoreSearch: true });
-    const fresh = fetch(req).then(res => {
+    // The pinned sync library never changes: cache first.
+    if (url.origin !== location.origin) {
+      const hit = await cache.match(req);
+      if (hit) return hit;
+      const res = await fetch(req);
       if (res.ok) cache.put(req, res.clone());
       return res;
-    }).catch(() => null);
-    if (cached) { e.waitUntil(fresh); return cached; }
-    const res = await fresh;
-    if (res) return res;
-    if (req.mode === 'navigate') return (await cache.match('index.html')) || Response.error();
-    return Response.error();
+    }
+    // Our own files: always try the network first so updates show up on the next open,
+    // and fall back to the saved copy when offline (or the network is very slow).
+    try {
+      const res = await Promise.race([
+        fetch(req, { cache: 'no-cache' }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 4000)),
+      ]);
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    } catch {
+      const cached = await cache.match(req, { ignoreSearch: true });
+      if (cached) return cached;
+      if (req.mode === 'navigate') return (await cache.match('index.html')) || Response.error();
+      return Response.error();
+    }
   })());
 });
 
