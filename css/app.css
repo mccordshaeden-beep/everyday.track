@@ -855,3 +855,4 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .mstat b { white-space: nowrap; font-size: clamp(14px, 4vw, 17px); overflow-wrap: normal; }
 .mstat span { line-height: 1.25; }
 .flags li.bad, .flags li.warn, .flags li.good { color: var(--ink); }
+.warn-box { background: color-mix(in srgb, var(--hc-yellow) 16%, var(--card)); border-left: 4px solid var(--hc-yellow); padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.45; margin: 0; }

@@ -161,6 +161,93 @@ export function parseOFX(text) {
   return { rows, org };
 }
 
+// ---- PDF statements -------------------------------------------------------------------------
+// pdf.js (bundled in js/vendor, loaded only when needed) pulls the text out on this device; we
+// rebuild the lines, then look for "date … description … amount" rows. Less exact than QFX/CSV,
+// so the preview always asks you to check.
+const MON = 'jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december';
+async function pdfLines(buf) {
+  const pdfjs = await import('../vendor/pdfjs/pdf.min.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(buf), isEvalSupported: false, disableFontFace: true, stopAtErrors: false }).promise;
+  const lines = [];
+  for (let n = 1; n <= Math.min(doc.numPages, 60); n++) {
+    const tc = await (await doc.getPage(n)).getTextContent();
+    const rows = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const x = it.transform[4], y = it.transform[5];
+      let r = rows.find(r => Math.abs(r.y - y) < 3);
+      if (!r) { r = { y, items: [] }; rows.push(r); }
+      r.items.push({ x, str: it.str, w: it.width || 0 });
+    }
+    rows.sort((a, b) => b.y - a.y);
+    for (const r of rows) {
+      r.items.sort((a, b) => a.x - b.x);
+      let line = '', end = null;
+      for (const it of r.items) { if (end != null) line += it.x - end > 10 ? '   ' : it.x - end > 0.8 ? ' ' : ''; line += it.str; end = it.x + it.w; }
+      lines.push(line.replace(/\s+$/, ''));
+    }
+  }
+  return lines;
+}
+const MONTH_NUM = m => ({ jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 })[m.slice(0, 3).toLowerCase()];
+/** Turn statement text lines into [Date, Description, Amount] rows. */
+export function parseStatementLines(lines) {
+  const text = lines.join('\n');
+  // statement end date → the year for "10/28"-style dates
+  let endY = null, endM = 12, m;
+  if ((m = text.match(new RegExp(`(${MON})\\.?\\s+\\d{1,2},?\\s+(\\d{4})\\s*(?:-|–|—|through|thru|to)\\s*(${MON})\\.?\\s+\\d{1,2},?\\s+(\\d{4})`, 'i')))) { endY = +m[4]; endM = MONTH_NUM(m[3]); }
+  else if ((m = text.match(/(\d{1,2})\/\d{1,2}\/(\d{2,4})\s*(?:-|–|—|through|thru|to)\s*(\d{1,2})\/\d{1,2}\/(\d{2,4})/i))) { endY = m[4].length === 2 ? 2000 + +m[4] : +m[4]; endM = +m[3]; }
+  else if ((m = text.match(/\b(20\d\d)\b/))) endY = +m[1];
+  endY = endY || new Date().getFullYear();
+  const isCard = /credit card|card ?member|minimum payment|payment due date|credit (limit|line)|new balance|previous balance/i.test(text);
+  const bank = (text.slice(0, 3000).match(/chase|wells fargo|bank of america|capital one|discover|american express|citi(bank)?|america first|mountain america|zions|u\.?s\.? bank|navy federal|usaa|ally|goldman sachs|apple card/i) || [''])[0];
+
+  const DATE = `(\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?|(?:${MON})\\.?\\s+\\d{1,2})`;
+  const AMT = '(-?\\s?\\(?\\$?\\s?[\\d,]+\\.\\d{2}\\)?(?:\\s?(?:CR|DR|-))?)';
+  const TX = new RegExp(`^\\s*${DATE}\\s+(.+?)\\s+${AMT}(?:\\s+${AMT})?\\s*$`, 'i');
+  const SKIP = /beginning balance|ending balance|opening balance|closing balance|balance forward|previous balance|new balance|^total|subtotal|daily balance|minimum payment|payment due|interest charged? on|annual percentage/i;
+  let section = null;
+  const raw = [];
+  for (const line of lines) {
+    const l = line.trim();
+    if (!l) continue;
+    const head = l.replace(/\s{2,}.*$/, '').toLowerCase();
+    if (l.length < 60 && !/\d+\.\d{2}\s*$/.test(l) || /^(total )?(deposits|additions|credits|payments|withdrawals|purchases|debits|checks|fees|atm|electronic|card)/i.test(head)) {
+      if (/deposit|addition|credits?\b|payments? and (other )?credits|money in|refund/i.test(head)) section = 1;
+      else if (/withdrawal|debit|purchase|checks? paid|fees?\b|money out|card transactions|charges/i.test(head)) section = -1;
+      else if (/^payments?\b/.test(head)) section = isCard ? 1 : -1;
+    }
+    if (!(m = l.match(TX))) continue;
+    let [, d, desc, a1] = m;
+    desc = desc.replace(new RegExp(`^${DATE}\\s+`, 'i'), '').replace(/\s{2,}/g, ' ').trim(); // drop a 2nd (post) date
+    if (!desc || SKIP.test(desc) || /^\d+$/.test(desc)) continue;
+    // date → YYYY-MM-DD
+    let mo, dy, yr = null;
+    if ((m = d.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/))) { mo = +m[1]; dy = +m[2]; if (m[3]) yr = m[3].length === 2 ? 2000 + +m[3] : +m[3]; }
+    else { const p = d.split(/\.?\s+/); mo = MONTH_NUM(p[0]); dy = +p[1]; }
+    if (!mo || mo > 12 || !dy || dy > 31) continue;
+    if (!yr) yr = mo > endM ? endY - 1 : endY; // December lines on a January statement
+    const neg = /^-|\(|DR|-\s*$/.test(a1.trim()), cr = /CR\s*$/i.test(a1);
+    const abs = Math.abs(parseAmount(a1.replace(/CR|DR/i, '')) || 0);
+    if (!abs) continue;
+    raw.push({ date: `${yr}-${String(mo).padStart(2, '0')}-${String(dy).padStart(2, '0')}`, desc, abs, neg, cr, section });
+  }
+  const anyNeg = raw.some(t => t.neg);
+  const rows = [['Date', 'Description', 'Amount']];
+  for (const t of raw) {
+    let v;
+    if (isCard) v = t.neg || t.cr ? t.abs : (t.section === 1 ? t.abs : -t.abs);     // cards: purchases are listed as positive
+    else if (t.neg) v = -t.abs;
+    else if (t.cr) v = t.abs;
+    else if (t.section != null) v = t.section * t.abs;
+    else v = anyNeg ? t.abs : -t.abs;                                                  // "-" marks money out → unsigned is money in
+    rows.push([t.date, t.desc, v.toFixed(2)]);
+  }
+  return { rows, bank, isCard };
+}
+
 // ---- CSV reading -----------------------------------------------------------------------------
 export function parseCSV(text) {
   text = text.replace(/^﻿/, '');
@@ -277,7 +364,7 @@ const BANK_STEPS = [
   ['Use a computer if you can', 'Bank apps usually can\'t export. Sign in to your bank\'s website in a browser instead. (On iPhone, use Safari. If you can\'t find a download option, tap aA → Request Desktop Website.)'],
   ['Open the account', 'Pick your checking account or credit card, and go to its Transactions, Activity or History page.'],
   ['Find Download / Export', 'Look for a button or ⤓ icon called Download, Export, or Download transactions. It\'s often near the search or filter options.'],
-  ['Choose Quicken or CSV', 'Best: "Quicken (.qfx)", "Microsoft Money (.ofx)" or "QuickBooks (.qbo)". These are the most reliable. Otherwise pick CSV ("Comma delimited", "Spreadsheet (.csv)" or "Microsoft Excel (.csv)"). Don\'t pick PDF.'],
+  ['Choose Quicken or CSV', 'Best: "Quicken (.qfx)", "Microsoft Money (.ofx)" or "QuickBooks (.qbo)". These are the most reliable. Otherwise pick CSV ("Comma delimited", "Spreadsheet (.csv)" or "Microsoft Excel (.csv)"). A PDF statement works too, but check the preview carefully.'],
   ['Pick the dates', 'Choose a date range, such as the last 30–90 days or since your last import. Overlapping dates are fine because duplicates are skipped.'],
   ['Import it here', 'Tap "Choose bank file" below and pick the file (on iPhone it\'s usually in Files → Downloads). Check the preview, then tap Import.'],
 ];
@@ -297,7 +384,7 @@ function showInstructions(catNames) {
   openSheet({
     title: 'Import from your bank',
     body: [
-      h('p', { class: 'muted' }, 'Download your transactions from your bank as a Quicken (QFX/OFX) or CSV file, then bring it in here. It takes about 2 minutes.'),
+      h('p', { class: 'muted' }, 'Download your transactions from your bank as a Quicken (QFX/OFX) or CSV file, or use a PDF statement, then bring it in here. It takes about 2 minutes.'),
       h('ol', { class: 'big-steps' }, BANK_STEPS.map(([t, d]) => h('li', {}, h('b', {}, t), h('span', {}, d)))),
       h('details', { class: 'bank-hints' }, h('summary', {}, 'Where it is at popular banks'),
         h('ul', {}, BANK_HINTS.map(([b, d]) => h('li', {}, h('b', {}, b + ': '), d))),
@@ -309,12 +396,25 @@ function showInstructions(catNames) {
 }
 
 async function previewImport(file, catNames) {
-  let rows, org = '', ofx = false;
+  let rows, org = '', ofx = false, pdf = false;
   try {
-    const text = await file.text();
-    if (/^\s*%PDF|^PK/.test(text.slice(0, 8))) { toast('That\'s a PDF or Excel file. Download QFX/OFX or CSV instead.'); return; }
-    if (isOFX(text)) { ({ rows, org } = parseOFX(text)); ofx = true; }
-    else rows = parseCSV(text);
+    const buf = await file.arrayBuffer();
+    const magic = new TextDecoder().decode(new Uint8Array(buf.slice(0, 8)));
+    if (/^PK/.test(magic)) { toast('That\'s an Excel file. Download QFX/OFX, CSV or the PDF statement instead.'); return; }
+    if (/%PDF/.test(magic)) {
+      toast('Reading PDF…');
+      let lines;
+      try { lines = await pdfLines(buf); }
+      catch (e) { toast(/password/i.test(e?.name + e?.message) ? 'That PDF is password-protected. Open it, save a copy without a password, and try again.' : 'Couldn\'t open that PDF.'); return; }
+      if (!lines.join('').trim()) { toast('That PDF looks like a scan (a picture of the page), so there\'s no text to read. Download QFX/CSV instead.'); return; }
+      const res = parseStatementLines(lines);
+      rows = res.rows; org = res.bank; pdf = true;
+      if (rows.length < 2) { toast('Couldn\'t find any transactions in that PDF. QFX or CSV from your bank\'s website will work better.'); return; }
+    } else {
+      const text = new TextDecoder().decode(buf);
+      if (isOFX(text)) { ({ rows, org } = parseOFX(text)); ofx = true; }
+      else rows = parseCSV(text);
+    }
   } catch { toast('Couldn\'t read that file.'); return; }
   if (rows.length < 2) { toast(ofx ? 'No transactions in that file. Try a wider date range.' : 'That file looks empty.'); return; }
   const map = detectColumns(rows);
@@ -386,7 +486,8 @@ async function previewImport(file, catNames) {
     body: [
       summaryEl,
       ofx ? h('p', { class: 'hint' }, '✓ Quicken/OFX file: dates, amounts and money in/out come straight from your bank.') : null,
-      h('details', { class: 'bank-hints', open: !parsed.length && !ofx },
+      pdf ? h('p', { class: 'warn-box' }, '📄 Read from a PDF statement. Check the list: make sure amounts are right and spending shows as "−". If spending shows as "+", tick "Flip signs" under Columns. Untick anything that isn\'t a real transaction.') : null,
+      h('details', { class: 'bank-hints', open: !parsed.length && !ofx && !pdf },
         h('summary', {}, 'Columns (fix these if things look wrong)'),
         colSelect('date', 'Date'), colSelect('desc', 'Description'),
         colSelect('amount', 'Amount', true), colSelect('debit', '…or Debit / money out', true), colSelect('credit', '…and Credit / money in', true),
