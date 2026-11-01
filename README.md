@@ -178,7 +178,6 @@ Quicken (.qfx), Microsoft Money (.ofx) and QuickBooks (.qbo) files are read dire
 PDF statements also work: pdf.js (bundled in `js/vendor/pdfjs`, Apache-2.0, loaded only when you import a PDF) reads the text on the device. The app then finds date/description/amount lines, works out the year from the statement period, and handles credit-card sign conventions. Scanned (image-only) or password-protected PDFs are rejected with a clear message. The preview asks you to double-check, because PDF layouts vary between banks.
 
 
-Money → **Bank**. The first time, the app generates a random 26-character bank password (130 bits). Save it in a password manager. It's separate from your account password and never leaves the device: PBKDF2-SHA256 (600k rounds) turns it into an AES-256-GCM key that encrypts each bank transaction before it's saved or synced, so the database only ever holds unreadable data. Record ids are HMACs, so they don't reveal amounts either. Forgot it? "Reset bank vault" deletes the encrypted data; re-import from your bank.
 
 Importing: download a CSV from your bank's website (step-by-step instructions are in the app), tap **Import bank file**, check the preview, Import. Columns are detected automatically (Chase, Wells Fargo, Bank of America, Capital One and most credit unions work). Duplicates are skipped, transfers and card payments are unticked, and categories you correct are remembered per merchant. While unlocked, bank spending counts in the Budget tab. The vault locks after 10 minutes idle or 2 minutes in the background.
 
