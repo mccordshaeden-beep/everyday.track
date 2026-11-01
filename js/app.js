@@ -5,7 +5,7 @@
 import { modules, byId } from './modules/index.js';
 import * as calendarMod from './modules/calendar.js';
 import * as store from './store.js';
-import { initSync, onStatus, getStatus, updatePassword } from './sync.js';
+import { initSync, onStatus, getStatus, updatePassword, onHouseholds } from './sync.js';
 import { h, icon, paintDots, openForm, toast } from './ui.js';
 import { DEFAULT_TABS, isOn, applyTheme } from './modules/settings.js';
 import { renderLogin } from './login.js';
@@ -138,6 +138,21 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     if (e.data?.type === 'open' && e.data.hash) location.hash = e.data.hash;
   });
 }
+
+// Tell people when someone shares something with them for the first time.
+let knownSpaces = null;
+onHouseholds(list => {
+  const ids = list.map(g => g.id);
+  if (knownSpaces) {
+    const me = getStatus().user?.id;
+    for (const g of list) if (!knownSpaces.includes(g.id) && g.created_by !== me) {
+      const who = g.kind === 'pair' ? (g.members || []).find(m => m.id !== me)?.name : g.name;
+      toast(`👥 ${who || 'Someone'} is sharing with you now`);
+    }
+  }
+  knownSpaces = ids;
+  render(true);
+});
 
 // Reminders + Canvas import keep themselves up to date once you're signed in.
 startAutoSchedule();

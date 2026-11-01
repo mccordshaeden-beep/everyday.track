@@ -86,7 +86,7 @@ export const chores = () => store.list(COL);
 
 // ---- household ----------------------------------------------------------------------------
 const me = () => getStatus().user?.id || '';
-const household = () => (getStatus().user ? households()[0] : null) || null;
+const household = () => (getStatus().user ? households().find(g => g.kind !== 'pair') : null) || null;
 const members = () => household()?.members || [];
 const nameOf = uid => (uid === me() ? 'You' : members().find(m => m.id === uid)?.name || 'Someone');
 const isShared = c => !!store.householdOf(c.id);

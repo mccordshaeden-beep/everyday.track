@@ -1,8 +1,9 @@
 // calendar.js — month view, events (incl. repeating class schedules), and the
 // tasks due on each day.
 import * as store from '../store.js';
-import { h, pageHead, card, empty, addBtn, btn, iconBtn, openForm, ymd, parseYmd, addDays, addMonths, fmtTime, relDay } from '../ui.js';
+import { h, pageHead, card, empty, addBtn, btn, iconBtn, openForm, openSheet, toast, ymd, parseYmd, addDays, addMonths, fmtTime, relDay } from '../ui.js';
 import { taskRow, renderTodo, editTask } from './tasks.js';
+import { canShare, spaces, spaceById, spaceLabel, spaceIcon, shareOptions, resolveShare, sharedTag, moveTo } from '../share.js';
 
 export const id = 'calendar';
 export const title = 'Calendar';
@@ -30,16 +31,23 @@ export function occursOn(ev, d) {
   }
 }
 
+// Which calendars are showing: '' = My calendar, otherwise a shared space id.
+const VIEW_ID = 'settings:calview';
+const hiddenCals = () => (store.get(VIEW_ID) || {}).hidden || [];
+const calOf = ev => store.householdOf(ev.id) || '';
+export const visibleEvents = () => store.list(COL).filter(ev => !hiddenCals().includes(calOf(ev)));
+
 export function eventsOn(d) {
-  return store.list(COL).filter(ev => occursOn(ev, d))
+  return visibleEvents().filter(ev => occursOn(ev, d))
     .sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 }
 
 export function editEvent(ev, defaults = {}) {
   openForm({
     title: ev ? 'Edit event' : 'New event',
-    values: ev || { date: selected, repeat: '', kind: 'personal', ...defaults },
+    values: ev ? { ...ev, cal: calOf(ev) } : { date: selected, repeat: '', kind: 'personal', cal: '', ...defaults },
     fields: [
+      ...(canShare() ? [{ name: 'cal', label: 'Calendar', type: 'select', options: shareOptions('📅 My calendar (private)'), hint: 'Pick a person or your household to share this event with them.' }] : []),
       { name: 'title', label: 'Title', required: true, autofocus: true, placeholder: 'Class, work shift, dinner…' },
       { name: 'date', label: 'Date (first day, if it repeats)', type: 'date', required: true },
       { name: 'start', label: 'Start time (blank = all day)', type: 'time' },
@@ -51,7 +59,15 @@ export function editEvent(ev, defaults = {}) {
       { name: 'until', label: 'Repeat until (optional)', type: 'date', hint: 'Set to the last day of the semester for classes' },
       { name: 'notes', label: 'Notes', type: 'textarea', rows: 2 },
     ],
-    onSubmit: v => { store.save(COL, v, ev?.id); },
+    onSubmit: v => {
+      const { cal, ...fields } = v;
+      resolveShare(cal || '').then(hh => {
+        if (hh === null) hh = ev ? calOf(ev) : '';
+        if (!ev) { store.save(COL, fields, undefined, { hh }); return; }
+        const id2 = moveTo(COL, { ...ev, ...fields }, hh);
+        store.save(COL, fields, id2);
+      });
+    },
     onDelete: ev ? () => store.remove(ev.id) : null,
     deleteLabel: ev?.repeat ? 'Delete all repeats' : 'Delete',
   });
@@ -64,14 +80,47 @@ export function eventRow(ev) {
     h('span', { class: `kind-bar k-${ev.kind || 'other'}` }),
     h('div', { class: 'row-main' },
       h('div', { class: 'row-title' }, ev.title),
-      ev.location ? h('div', { class: 'row-sub' }, ev.location) : null));
+      (ev.location || calOf(ev)) ? h('div', { class: 'row-meta' }, calOf(ev) ? sharedTag(ev.id) : null, ev.location ? h('span', { class: 'row-sub' }, ev.location) : null) : null));
+}
+
+// ---- calendars bar (show/hide, share a calendar) --------------------------------------------
+function calendarsBar(rerender) {
+  if (!canShare()) return null;
+  const hidden = hiddenCals();
+  const toggle = id => { const now = hidden.includes(id) ? hidden.filter(x => x !== id) : [...hidden, id]; store.save('settings', { hidden: now }, VIEW_ID); };
+  const used = new Set(store.list(COL).map(calOf));
+  const cals = [['', '📅 Mine'], ...spaces().filter(g => used.has(g.id)).map(g => [g.id, `${spaceIcon(g)} ${spaceLabel(g)}`])];
+  return h('div', { class: 'cal-bar' },
+    cals.length > 1 ? cals.map(([id, label]) => h('button', { type: 'button', class: 'chip' + (hidden.includes(id) ? '' : ' on'), 'aria-pressed': String(!hidden.includes(id)), onclick: () => toggle(id), title: hidden.includes(id) ? 'Hidden. Tap to show' : 'Showing. Tap to hide' }, label)) : null,
+    h('button', { type: 'button', class: 'btn ghost sm', onclick: shareCalendar }, '👥 Share a calendar'));
+}
+
+function shareCalendar() {
+  const mine = store.list(COL).filter(ev => !calOf(ev));
+  openForm({
+    title: 'Share a calendar',
+    note: 'A shared calendar shows up for you and the other person (or your household). Anyone in it can add and edit its events. When you add an event, choose this calendar to put it there.',
+    fields: [
+      { name: 'who', label: 'Share with', type: 'select', options: shareOptions().filter(o => o[0] !== '') },
+      { name: 'all', label: `Also move my ${mine.length} existing event${mine.length === 1 ? '' : 's'} onto it`, type: 'checkbox' },
+    ],
+    values: { who: spaces()[0]?.id || '__new', all: false },
+    submitLabel: 'Share',
+    onSubmit: v => {
+      resolveShare(v.who).then(hh => {
+        if (!hh) return;
+        if (v.all) for (const ev of mine) moveTo(COL, ev, hh);
+        toast(`Shared calendar with ${spaceLabel(spaceById(hh)) || 'them'} ✓`);
+      });
+    },
+  });
 }
 
 function monthGrid(ctx) {
   const first = parseYmd(month + '-01');
   const gridStart = addDays(month + '-01', -first.getDay());
   const today = ymd();
-  const events = store.list(COL);
+  const events = visibleEvents();
   const tasks = store.list('tasks').filter(t => !t.done && t.due);
 
   const cells = [];
@@ -117,6 +166,8 @@ export function render(root, ctx) {
   root.append(h('div', { class: 'seg seg-main' }, [['calendar', '📅 Calendar'], ['todo', `☑ To-do${open ? ` (${open})` : ''}`]].map(([v, l]) =>
     h('button', { type: 'button', class: tab === v ? 'on' : '', onclick: () => { tab = v; ctx.rerender(); } }, l))));
   if (tab === 'todo') { renderTodo(root, ctx); return; }
+  const cb = calendarsBar(ctx.rerender);
+  if (cb) root.append(cb);
 
   const evs = eventsOn(selected);
   const due = store.list('tasks').filter(t => t.due === selected);

@@ -697,3 +697,14 @@ details.guide p { margin-top: 6px; color: var(--muted); font-size: 14.5px; line-
 .calm-badges .card .card-head { display: none; }
 .habit-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .look-seg { flex: 0 1 260px; }
+/* sharing */
+.tag.shared-tag { background: var(--rm-purple, #e8e0f4); color: var(--rm-purple-i, #6b4fa8); }
+.cal-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cal-bar .chip { min-height: 32px; padding: 3px 10px; font-size: 13px; }
+.share-bar { background: var(--rm-purple, #e8e0f4); padding: 8px 12px; border-radius: 12px; }
+.htile-partners { font-size: 11px; color: var(--muted); line-height: 1.2; }
+.partners-week { display: flex; flex-direction: column; gap: 6px; }
+.pw-row { display: grid; grid-template-columns: 80px repeat(7, 1fr); gap: 4px; align-items: center; font-size: 13px; }
+.pw-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.pw-dot { height: 18px; border-radius: 6px; background: var(--field); }
+.pw-dot.on { background: var(--hc, var(--accent)); }

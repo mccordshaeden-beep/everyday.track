@@ -10,6 +10,7 @@ import { LIBRARY } from '../data/recipes.js';
 import { ALLERGENS, DIETS, conflicts, summary as dietSummary, isSet as dietIsSet } from '../data/diet.js';
 import { callFunction, getStatus } from '../sync.js';
 import { fitness } from './workouts.js';
+import { canShare, spaces, spaceById, spaceLabel, spaceIcon, shareOptions, resolveShare, moveTo } from '../share.js';
 
 export const id = 'food';
 export const title = 'Food';
@@ -111,7 +112,7 @@ export function addGroceries(items, note = '') {
     const name = ingName(raw) || raw.trim();
     const key = ingKey(name);
     if (!name || open.some(k => matches(key, k))) continue;
-    store.save(GROC, { name, qty: ingQty(raw), note: it.note ?? note, got: false });
+    store.save(GROC, { name, qty: ingQty(raw), note: it.note ?? note, got: false }, undefined, { hh: grocSpace() });
     open.push(key);
     n++;
   }
@@ -583,6 +584,43 @@ function renderPantry(root) {
 }
 
 // ==== groceries =================================================================================
+// The list can be shared with a person or your household: new items go into that shared space.
+const GSHARE_ID = 'settings:grocshare';
+function grocSpace() { const id = (store.get(GSHARE_ID) || {}).hh; return id && spaceById(id) ? id : ''; }
+function shareList() {
+  openForm({
+    title: 'Share your shopping list',
+    note: 'Everyone you share with sees the same list live and can add or check off items.',
+    fields: [{ name: 'who', label: 'Share with', type: 'select', options: shareOptions().filter(o => o[0] !== '') }],
+    values: { who: spaces()[0]?.id || '__new' },
+    submitLabel: 'Share',
+    onSubmit: v => resolveShare(v.who).then(hh => { if (hh) useSharedList(hh); }),
+  });
+}
+function useSharedList(hh) {
+  store.save('settings', { hh }, GSHARE_ID);
+  for (const g of store.list(GROC).filter(x => !store.householdOf(x.id) && !x.got)) moveTo(GROC, g, hh);
+  toast(`Shopping list shared with ${spaceLabel(spaceById(hh))} ✓`);
+}
+function stopSharingList() {
+  if (!confirm('Stop sharing? Items already on the shared list stay there for the others. New items will be private.')) return;
+  store.save('settings', { hh: '' }, GSHARE_ID);
+}
+function groceryShareBar() {
+  if (!canShare()) return null;
+  const cur = grocSpace();
+  if (cur) {
+    const g = spaceById(cur);
+    return h('div', { class: 'diet-bar share-bar' }, h('span', {}, `${spaceIcon(g)} Shared with `, h('b', {}, spaceLabel(g))), btn('Stop sharing', stopSharingList, 'ghost sm'));
+  }
+  // someone shared a list with me?
+  const theirs = [...new Set(store.list(GROC).map(x => store.householdOf(x.id)).filter(Boolean))].map(spaceById).filter(Boolean);
+  if (theirs.length) return h('div', { class: 'diet-bar share-bar' },
+    h('span', {}, `${spaceIcon(theirs[0])} ${spaceLabel(theirs[0])} shared a shopping list with you`),
+    btn('Add my items to it', () => useSharedList(theirs[0].id), 'primary sm'));
+  return h('div', { class: 'diet-bar' }, h('span', { class: 'muted' }, 'Shop with someone?'), btn('👥 Share list', shareList, 'ghost sm'));
+}
+
 export const groceryCount = () => store.list(GROC).filter(g => !g.got).length;
 
 function editGrocery(g) {
@@ -618,6 +656,8 @@ function putAway(items) {
 }
 
 function renderGroceries(root) {
+  const sb = groceryShareBar();
+  if (sb) root.append(sb);
   const input = h('input', { type: 'text', placeholder: 'Add an item… (commas add several)', 'data-fk': 'groc-quick', enterkeyhint: 'done', 'aria-label': 'Grocery item' });
   root.append(h('form', {
     class: 'quick',

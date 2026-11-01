@@ -189,6 +189,24 @@ Home freshness score, Mon–Sun week strip with real due dates, rooms, move/snoo
 
 Tap-to-log rings grouped into Morning / Afternoon / Evening / Anytime routines (▶ Start walks you through one at a time). Each habit can be every day, certain days, or N times a week; "build" or "quit" (days clean, slips). Tap a habit's name for stats (current/best streak, 30-day success %) and a month heatmap; tap a day to change it or use a 🧊 streak freeze (2 a month). Optional reminder time per habit (uses the same push reminders). Daily mood & energy check-in with simple habit/mood insights. Milestone celebrations at 3, 7, 14, 21, 30, 50, 66, 100, 200, 365 and 9 badges.
 
+## Workouts tab
+
+Pick one goal (Bulk / Maintain / Shred). It changes rep advice and rest times, adds an extra set on big lifts when you bulk, and sets estimated calorie and protein targets that the Food tab uses (recipes that suit the goal are listed first). Under Plans you can build your own plan or start from a ready-made one: gym, dumbbell, band, kettlebell, no-equipment or calisthenics. Guided sessions fill in your last weights and tell you when to go up. The rule: once every set reaches the top of the rep range, add 5 lb on upper body, 10 lb on lower body, or move to the next dumbbell. If you stall twice, drop about 10%. The Calisthenics tab has a how-to guide, 6 skill ladders that track your level, and 3 plans.
+
+## Today and the To-do list
+
+Use the ⚙ button on Today to reorder or hide cards. The old Tasks tab now lives under Calendar → To-do.
+
+## Sharing
+
+You can share with another Everyday user by their account email, which creates a private space for the two of you, or with your household:
+- **Events:** pick a Calendar when you edit an event.
+- **Whole calendars:** Calendar → 👥 Share a calendar. Tap a calendar chip to show or hide it.
+- **Habits:** use "Do it together with". Each person tracks their own progress and can see the other's.
+- **Shopping list:** Food → Groceries → Share list.
+
+Settings → Sharing lists everyone you share with and lets you stop. In the database this uses the `share_with_person()` RPC and `households.kind = 'pair'`, with the same member-only RLS as households.
+
 ## Ideas for later
 
 - Recurring tasks, a "skip one occurrence" option for repeating events

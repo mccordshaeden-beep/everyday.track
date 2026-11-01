@@ -7,6 +7,8 @@
 // reminders.js), a daily mood & energy check-in with simple insights, milestones,
 // streak freezes and badges.
 import * as store from '../store.js';
+import { getStatus } from '../sync.js';
+import { canShare, spaceById, spaceLabel, shareOptions, resolveShare, sharedTag, others } from '../share.js';
 import {
   h, pageHead, card, empty, addBtn, btn, iconBtn, icon, openForm, openSheet, dayNav, toast, barChart,
   ymd, addDays, addMonths, parseYmd, fmtDay, relDay, fmtTime,
@@ -61,11 +63,17 @@ const routineLabel = key => { const r = ROUTINES.find(x => x[0] === key)[1]; ret
 // ---- data helpers -------------------------------------------------------------------------
 export const habits = () => store.list(COL).filter(x => !x.archived)
   .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.created || '').localeCompare(b.created || ''));
-const logId = (hid, d) => `hl:${hid}:${d}`;
+// Shared habits: everyone keeps their own log (id includes the person), shared with the group.
+const meId = () => getStatus().user?.id || 'me';
+const spaceOf = hid => store.householdOf(hid);
+const logId = (hid, d, uid) => (spaceOf(hid) ? `hl:${hid}:${uid || meId()}:${d}` : `hl:${hid}:${d}`);
 const logOf = (hid, d) => store.get(logId(hid, d));
 export const count = (hid, d) => Number(logOf(hid, d)?.count) || 0;
+const countFor = (hid, uid, d) => Number(store.get(logId(hid, d, uid))?.count) || 0;
 const frozen = (hid, d) => !!logOf(hid, d)?.frozen;
-const setCount = (hid, d, n, note) => store.save(LOGS, { habitId: hid, date: d, count: Math.max(0, Math.round(n * 100) / 100), frozen: false, ...(note !== undefined ? { note } : {}) }, logId(hid, d));
+const mine = l => !l.by || l.by === meId();
+const saveLog = (hid, d, fields) => store.save(LOGS, { habitId: hid, date: d, ...(spaceOf(hid) ? { by: meId() } : {}), ...fields }, logId(hid, d), { hh: spaceOf(hid) || '' });
+const setCount = (hid, d, n, note) => saveLog(hid, d, { count: Math.max(0, Math.round(n * 100) / 100), frozen: false, ...(note !== undefined ? { note } : {}) });
 const noteOf = (hid, d) => logOf(hid, d)?.note || '';
 
 export const isQuit = hb => hb.kind === 'quit';
@@ -191,8 +199,8 @@ function successRate(hb) {
   return total ? Math.round((ok / total) * 100) : null;
 }
 
-const totalLogged = hb => store.list(LOGS).filter(l => l.habitId === hb.id && (isQuit(hb) ? false : Number(l.count) >= goalOf(hb))).length;
-const freezesUsedThisMonth = () => store.list(LOGS).filter(l => l.frozen && l.date?.startsWith(ymd().slice(0, 7))).length;
+const totalLogged = hb => store.list(LOGS).filter(l => l.habitId === hb.id && mine(l) && (isQuit(hb) ? false : Number(l.count) >= goalOf(hb))).length;
+const freezesUsedThisMonth = () => store.list(LOGS).filter(l => l.frozen && mine(l) && l.date?.startsWith(ymd().slice(0, 7))).length;
 
 // ---- logging, milestones, badges ---------------------------------------------------------------
 function log(hb, d, n, note) {
@@ -257,7 +265,7 @@ function editHabit(hb, defaults = {}) {
   const quit = (hb?.kind || defaults.kind) === 'quit';
   openForm({
     title: hb ? hb.name : quit ? 'Habit to quit' : 'New habit',
-    values: hb ? { ...hb, schedule: hb.schedule || 'daily', routine: hb.routine || 'anytime', color: colorOf(hb), perWeek: hb.perWeek || 3, perMonth: hb.perMonth || 8, every: hb.every || 2, step: hb.step || 1, target: hb.target || 'atleast', kind: hb.kind || 'build', startDate: startOf(hb) }
+    values: hb ? { ...hb, share: spaceOf(hb.id) || '', schedule: hb.schedule || 'daily', routine: hb.routine || 'anytime', color: colorOf(hb), perWeek: hb.perWeek || 3, perMonth: hb.perMonth || 8, every: hb.every || 2, step: hb.step || 1, target: hb.target || 'atleast', kind: hb.kind || 'build', startDate: startOf(hb) }
       : { goal: 1, step: 1, target: 'atleast', every: 2, perMonth: 8, emoji: quit ? '🚫' : '✅', schedule: 'daily', routine: 'anytime', color: COLORS[habits().length % COLORS.length], perWeek: 3, kind: 'build', startDate: ymd(), ...defaults },
     fields: [
       { name: 'name', label: quit ? 'What are you quitting?' : 'Habit', required: true, autofocus: true, placeholder: quit ? 'Soda, vaping, doomscrolling…' : 'Water, stretch, read…' },
@@ -279,13 +287,26 @@ function editHabit(hb, defaults = {}) {
         { name: 'routine', label: 'Part of which routine?', type: 'select', options: ROUTINES },
         { name: 'remind', label: 'Remind me at (optional)', type: 'time', hint: 'Needs Settings → Reminders turned on for this device.' },
       ]),
+      ...(canShare() ? [{ name: 'share', label: 'Do it together with', type: 'select', options: shareOptions('Just me'), hint: 'Shared habits: everyone tracks their own progress and can see each other\'s.' }] : []),
     ],
     onSubmit: v => {
       if (v.kind === 'quit' && !quit && !hb) { editHabit(null, { ...v, kind: 'quit' }); return; }
       const fields = { ...v, goal: v.goal === '' ? 1 : Number(v.goal), perWeek: Number(v.perWeek) || 3, perMonth: Number(v.perMonth) || 8, every: Number(v.every) || 2, step: Number(v.step) || 1 };
       if (fields.endDate && fields.startDate && fields.endDate < fields.startDate) { toast('End date is before the start date'); return false; }
       if (fields.schedule === 'days' && !(fields.days || []).length) { toast('Pick at least one day'); return false; }
-      store.save(COL, hb ? fields : { ...fields, order: habits().length }, hb?.id);
+      const { share, ...clean } = fields;
+      resolveShare(share || '').then(hh => {
+        if (hh === null) hh = hb ? spaceOf(hb.id) || '' : '';
+        if (!hb) { store.save(COL, { ...clean, order: habits().length }, undefined, { hh }); return; }
+        if ((spaceOf(hb.id) || '') === hh) { store.save(COL, clean, hb.id); return; }
+        // moving to/from a shared space: copy the habit and your own logs
+        const myLogs = store.list(LOGS).filter(l => l.habitId === hb.id && mine(l));
+        const { id: _o, ...data } = hb;
+        const newId = store.save(COL, { ...data, ...clean }, undefined, { hh });
+        for (const l of myLogs) { const { id: lid, habitId, ...ld } = l; saveLog(newId, l.date, ld); store.remove(lid); }
+        store.remove(hb.id);
+        toast(hh ? `Shared with ${spaceLabel(spaceById(hh))}` : 'Made private');
+      });
     },
     onDelete: hb ? () => store.remove(hb.id) : null,
   });
@@ -300,6 +321,19 @@ function ringSvg(frac, size = 64) {
   svg.setAttribute('class', 'hring');
   svg.innerHTML = `<circle cx="32" cy="32" r="${r}" class="hring-bg"/><circle cx="32" cy="32" r="${r}" class="hring-fg" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - Math.min(1, frac))}"/>`;
   return svg;
+}
+
+/** "Jordan ✓ · Sam 3/8" under a shared habit. */
+function partnersLine(hb, d) {
+  const g = spaceById(spaceOf(hb.id));
+  if (!g) return null;
+  const ps = others(g);
+  if (!ps.length) return null;
+  return h('span', { class: 'htile-partners' }, ps.map(p => {
+    const n = countFor(hb.id, p.id, d);
+    const ok = isQuit(hb) ? !n : hb.target === 'atmost' ? n <= goalOf(hb) : n >= goalOf(hb);
+    return `${p.name} ${isQuit(hb) ? (n ? '✗' : '✓') : ok ? '✓' : goalOf(hb) !== 1 ? `${fmtN(n)}/${fmtN(goalOf(hb))}` : '–'}`;
+  }).join(' · '));
 }
 
 function ringFrac(hb, d) {
@@ -372,7 +406,8 @@ function tile(hb, d) {
       done && !quit ? h('span', { class: 'hring-check' }, '✓') : null),
     h('button', { type: 'button', class: 'htile-name', onclick: () => details(hb) }, hb.name),
     h('span', { class: 'htile-sub' }, restDay ? (hb.pausedFrom && d >= hb.pausedFrom ? '⏸ Paused' : hb.endDate && d > hb.endDate ? 'Finished' : 'Rest day') : subText(hb, d)),
-    s > 1 && !quit ? h('span', { class: 'htile-streak' }, `🔥 ${s}${unitOf(hb) === 'week' ? 'w' : ''}`) : null,
+    s > 1 && !quit ? h('span', { class: 'htile-streak' }, `${fun() ? '🔥 ' : ''}${s}${unitOf(hb) === 'week' ? 'w' : 'd'} streak`) : null,
+    partnersLine(hb, d),
     !quit ? h('button', { type: 'button', class: 'htile-edit', 'aria-label': `Enter amount or note for ${hb.name}`, onclick: () => logSheet(hb, d) }, '✎') : null);
   return el;
 }
@@ -435,6 +470,7 @@ function details(hb) {
       h('div', { class: `heatmap hc-${colorOf(hb)}` }, ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map(x => h('span', { class: 'hm-dow' }, x)), cells),
       h('p', { class: 'hint' }, isQuit(hb) ? 'Green = clean day, red = slip. Tap a day to change it.' : `Tap a day to change it. 🧊 Missed a day? Use a streak freeze (${FREEZES_PER_MONTH - freezesUsedThisMonth()} left this month).`),
       Object.keys(hb.milestones || {}).length ? h('div', { class: 'chip-row' }, Object.keys(hb.milestones).map(Number).sort((a, b) => a - b).map(m => h('span', { class: 'tag ok-tag' }, `🏁 ${m} ${unitOf(hb)}s`))) : null,
+      partnersWeek(hb),
       trend(hb),
       logHistory(hb, draw),
       !isQuit(hb) ? h('p', { class: 'muted small' }, `Completed ${totalLogged(hb)} time${totalLogged(hb) === 1 ? '' : 's'} in total.`) : null,
@@ -450,6 +486,17 @@ function details(hb) {
   ] });
 }
 
+function partnersWeek(hb) {
+  const g = spaceById(spaceOf(hb.id));
+  if (!g) return null;
+  const days = Array.from({ length: 7 }, (_, i) => addDays(ymd(), i - 6));
+  const row = (name, uid) => h('div', { class: 'pw-row' }, h('span', { class: 'pw-name' }, name),
+    days.map(d => { const n = uid ? countFor(hb.id, uid, d) : count(hb.id, d); const ok = isQuit(hb) ? !n : hb.target === 'atmost' ? n <= goalOf(hb) : n >= goalOf(hb);
+      return h('span', { class: 'pw-dot' + (ok && (n || isQuit(hb) || hb.target === 'atmost') ? ' on' : ''), title: fmtDay(d) }); }));
+  return h('div', { class: 'partners-week' }, h('p', { class: 'field-label' }, `Together with ${spaceLabel(g)} · last 7 days`),
+    row('You', ''), others(g).map(p => row(p.name, p.id)));
+}
+
 /** Last 14 days as a bar chart, for habits you measure. */
 function trend(hb) {
   if (isQuit(hb) || (goalOf(hb) === 1 && !hb.unit)) return null;
@@ -462,7 +509,7 @@ function trend(hb) {
 
 /** Recent logs with amounts and notes (journal). */
 function logHistory(hb, redraw) {
-  const logs = store.list(LOGS).filter(l => l.habitId === hb.id && (Number(l.count) || l.note || l.frozen)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 20);
+  const logs = store.list(LOGS).filter(l => l.habitId === hb.id && mine(l) && (Number(l.count) || l.note || l.frozen)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 20);
   if (!logs.length) return null;
   const u = hb.unit ? ' ' + hb.unit : '';
   return h('div', {}, h('p', { class: 'field-label' }, 'Log & notes'),
@@ -487,7 +534,7 @@ function dayMenu(hb, d, redraw) {
     values: { count: n, freeze: false, note: noteOf(hb.id, d) },
     fields,
     onSubmit: v => {
-      if (v.freeze) { store.save(LOGS, { habitId: hb.id, date: d, count: Number(v.count) || 0, frozen: true }, logId(hb.id, d)); toast('🧊 Streak protected'); }
+      if (v.freeze) { saveLog(hb.id, d, { count: Number(v.count) || 0, frozen: true }); toast('🧊 Streak protected'); }
       else log(hb, d, Number(v.count) || 0, v.note || '');
       setTimeout(redraw, 50);
     },

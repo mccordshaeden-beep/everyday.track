@@ -183,7 +183,7 @@ export async function syncNow() {
 
 // ---- households (shared cleaning with roommates) -----------------------------------------
 async function refreshHouseholds() {
-  const { data: hs, error } = await client.from('households').select('id,name,invite_code,created_by');
+  const { data: hs, error } = await client.from('households').select('id,name,invite_code,created_by,kind');
   if (error) { console.warn(error); return; }
   const { data: ms } = await client.from('household_members').select('household_id,user_id,display_name,joined_at').order('joined_at');
   const list = (hs || []).map(h => ({ ...h, members: (ms || []).filter(m => m.household_id === h.id).map(m => ({ id: m.user_id, name: m.display_name })) }));
@@ -219,6 +219,12 @@ export async function leaveHousehold(hh) {
   if (error) throw new Error(error.message);
   await refreshHouseholds();
 }
+/** Share with someone by their account email: returns a private two-person space id. */
+export async function sharePerson(email, myName) {
+  const r = await rpc('share_with_person', { p_email: email, p_my_name: myName });
+  await refreshHouseholds(); syncNow(); return r.id;
+}
+
 export async function newInviteCode(hh) {
   const code = await rpc('new_household_code', { p_household: hh });
   await refreshHouseholds(); return code;

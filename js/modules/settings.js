@@ -5,6 +5,8 @@ import { SUPABASE_URL } from '../config.js';
 import { h, pageHead, card, btn, toast, paintDots, openSheet } from '../ui.js';
 import { modules } from './index.js';
 import * as rem from '../reminders.js';
+import { spaces, spaceLabel, spaceIcon, others } from '../share.js';
+import { leaveHousehold } from '../sync.js';
 
 export const id = 'settings';
 export const title = 'Settings';
@@ -245,6 +247,22 @@ function museCard(ctx) {
     box);
 }
 
+function sharingCard() {
+  const s = getStatus();
+  if (!s.configured || !s.user) return null;
+  const list = spaces();
+  return card('Sharing', {},
+    h('p', { class: 'muted' }, 'People and households you share things with: calendar events, calendars, habits, the shopping list and cleaning. Use the "Calendar", "Do it together with" or "Share list" options to share.'),
+    list.length ? list.map(g => h('div', { class: 'row' },
+      h('span', { class: 'emoji' }, spaceIcon(g)),
+      h('div', { class: 'row-main' },
+        h('div', { class: 'row-title' }, spaceLabel(g)),
+        h('div', { class: 'row-sub' }, g.kind === 'pair' ? 'Just the two of you' : `Household · ${others(g).map(m => m.name).join(', ') || 'only you so far'}`)),
+      btn(g.kind === 'pair' ? 'Stop sharing' : 'Leave', () => {
+        if (confirm(`Stop sharing with ${spaceLabel(g)}? Things you shared stay with them; you'll stop seeing what's in this space.`)) leaveHousehold(g.id).then(() => toast('Done')).catch(e => toast(e.message));
+      }, 'ghost sm'))) : h('p', { class: 'muted small' }, 'You aren\'t sharing anything yet.'));
+}
+
 function backupCard() {
   const file = h('input', {
     type: 'file', accept: 'application/json,.json', hidden: true,
@@ -281,7 +299,7 @@ function installCard() {
 export function render(root, ctx) {
   root.append(pageHead('Settings'));
   root.append(h('div', { class: 'grid' },
-    syncCard(ctx), remindersCard(ctx), museCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
+    syncCard(ctx), sharingCard(), remindersCard(ctx), museCard(ctx), appearanceCard(ctx), trackersCard(), tabsCard(ctx), installCard(), backupCard(),
     card('This device', {},
       h('p', { class: 'muted' }, 'Erase removes the data stored on this device only. If you are signed in, it downloads again on the next sync.'),
       btn('Erase data on this device', () => {
