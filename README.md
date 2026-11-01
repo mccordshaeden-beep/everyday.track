@@ -169,7 +169,10 @@ How it works: the app writes the next 10 days of reminders into the `reminders` 
 
 School → **Paste Canvas link**. In Canvas: Calendar → "Calendar Feed" → copy. The `canvas-feed` Edge Function downloads it (browsers can't fetch Canvas directly). Assignments become School assignments (classes are created automatically from the course code), other Canvas calendar items go into Calendar. It refreshes every 6 hours when you open the app, and never undoes what you've checked off, graded or deleted.
 
-## Bank tab (CSV import, encrypted)
+## Bank tab (QFX/OFX/QBO or CSV import, encrypted)
+
+Quicken (.qfx), Microsoft Money (.ofx) and QuickBooks (.qbo) files are read directly; they're the most reliable format, and the bank's own transaction ids (FITID) prevent duplicates when date ranges overlap. Only date, payee/memo, amount and the bank's name are kept; account and routing numbers are ignored.
+
 
 Money → **Bank**. The first time, the app generates a random 26-character bank password (130 bits). Save it in a password manager. It's separate from your account password and never leaves the device: PBKDF2-SHA256 (600k rounds) turns it into an AES-256-GCM key that encrypts each bank transaction before it's saved or synced, so the database only ever holds unreadable data. Record ids are HMACs, so they don't reveal amounts either. Forgot it? "Reset bank vault" deletes the encrypted data; re-import from your bank.
 

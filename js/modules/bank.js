@@ -1,4 +1,4 @@
-// bank.js — the Bank tab (inside Money): bank transactions imported from CSV files,
+// bank.js — the Bank tab (inside Money): bank transactions imported from CSV or OFX/QFX files,
 // protected by a separate, randomly generated 130-bit bank password.
 //
 // Security model
@@ -141,6 +141,26 @@ export function bankSpending(ym) {
   return { spent, income, byCat };
 }
 
+// ---- OFX / QFX / QBO reading (Quicken, Money and QuickBooks downloads) -----------------------
+// Works for both the old SGML style (tags without closing tags) and the newer XML style.
+// Only the date, amount, payee/memo and the bank's own transaction id (FITID) are kept.
+export const isOFX = text => /OFXHEADER|<OFX>/i.test(text.slice(0, 4000));
+const ofxDecode = v => String(v || '').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ').trim();
+const ofxTag = (block, tag) => { const m = block.match(new RegExp(`<${tag}>([^<\r\n]*)`, 'i')); return m ? ofxDecode(m[1]) : ''; };
+export function parseOFX(text) {
+  const rows = [['Date', 'Description', 'Amount', 'FITID']];
+  const blocks = text.split(/<STMTTRN>/i).slice(1).map(b => b.split(/<\/STMTTRN>/i)[0]);
+  for (const b of blocks) {
+    const d = ofxTag(b, 'DTPOSTED') || ofxTag(b, 'DTUSER');
+    const date = /^\d{8}/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : '';
+    const name = ofxTag(b, 'NAME'), memo = ofxTag(b, 'MEMO');
+    const desc = (name && memo && !memo.toLowerCase().includes(name.toLowerCase()) && name.length < 12) ? `${name} ${memo}` : (name || memo || ofxTag(b, 'PAYEE'));
+    rows.push([date, desc, ofxTag(b, 'TRNAMT'), ofxTag(b, 'FITID')]);
+  }
+  const org = ofxTag(text, 'ORG');
+  return { rows, org };
+}
+
 // ---- CSV reading -----------------------------------------------------------------------------
 export function parseCSV(text) {
   text = text.replace(/^﻿/, '');
@@ -199,6 +219,7 @@ export function detectColumns(rows) {
     amount: find(/^(transaction )?amount$|^amount \(?usd\)?$/),
     debit: find(/debit|withdrawal|money out|charges?$/),
     credit: find(/credit|deposit|money in|payments?$/),
+    fitid: find(/^fitid$/),
     hasHeader: true,
   };
   if (map.date < 0) map.date = find(/date/);
@@ -212,7 +233,7 @@ export function detectColumns(rows) {
   const numCols = [...Array(cols).keys()].filter(i => i !== dateCol && score(i, v => /^[-($]*[\d,]+\.\d{2}\)?$/.test(String(v || '').trim())) >= sample.length * 0.6);
   const textCol = [...Array(cols).keys()].filter(i => i !== dateCol && !numCols.includes(i))
     .sort((a, b) => sample.reduce((s, r) => s + (r[b] || '').length, 0) - sample.reduce((s, r) => s + (r[a] || '').length, 0))[0];
-  return { date: dateCol, desc: textCol ?? -1, amount: numCols[0] ?? -1, debit: -1, credit: -1, hasHeader: !!parseDate(rows[0][dateCol]) === false };
+  return { date: dateCol, desc: textCol ?? -1, amount: numCols[0] ?? -1, debit: -1, credit: -1, fitid: -1, hasHeader: !!parseDate(rows[0][dateCol]) === false };
 }
 
 // ---- categories --------------------------------------------------------------------------------
@@ -256,30 +277,31 @@ const BANK_STEPS = [
   ['Use a computer if you can', 'Bank apps usually can\'t export. Sign in to your bank\'s website in a browser instead. (On iPhone, use Safari. If you can\'t find a download option, tap aA → Request Desktop Website.)'],
   ['Open the account', 'Pick your checking account or credit card, and go to its Transactions, Activity or History page.'],
   ['Find Download / Export', 'Look for a button or ⤓ icon called Download, Export, or Download transactions. It\'s often near the search or filter options.'],
-  ['Choose CSV', 'Pick the CSV format. It may be called "Comma delimited", "Spreadsheet (.csv)" or "Microsoft Excel (.csv)". Don\'t pick PDF, QFX or OFX.'],
+  ['Choose Quicken or CSV', 'Best: "Quicken (.qfx)", "Microsoft Money (.ofx)" or "QuickBooks (.qbo)". These are the most reliable. Otherwise pick CSV ("Comma delimited", "Spreadsheet (.csv)" or "Microsoft Excel (.csv)"). Don\'t pick PDF.'],
   ['Pick the dates', 'Choose a date range, such as the last 30–90 days or since your last import. Overlapping dates are fine because duplicates are skipped.'],
   ['Import it here', 'Tap "Choose bank file" below and pick the file (on iPhone it\'s usually in Files → Downloads). Check the preview, then tap Import.'],
 ];
 const BANK_HINTS = [
-  ['Chase', 'Account → ⤓ (Download account activity) → File type: CSV'],
-  ['Wells Fargo', 'Account Activity → Download Account Activity → Comma Delimited'],
-  ['Bank of America', 'Account → Download → File type: Microsoft Excel format'],
-  ['Capital One', 'Account → View more transactions → Download Transactions → CSV'],
-  ['Credit unions (America First, Mountain America…)', 'Account → Transactions/History → Export or Download → CSV'],
+  ['Chase', 'Account → ⤓ (Download account activity) → File type: Quicken (QFX) or CSV'],
+  ['Wells Fargo', 'Account Activity → Download Account Activity → Quicken/Microsoft Money or Comma Delimited'],
+  ['Bank of America', 'Account → Download → File type: Quicken (.qfx), Microsoft Money (.ofx) or Microsoft Excel format'],
+  ['Capital One', 'Account → View more transactions → Download Transactions → QFX, OFX or CSV'],
+  ['Credit unions (America First, Mountain America…)', 'Account → Transactions/History → Export or Download → OFX/QFX ("Quicken") or CSV'],
 ];
 
 function showInstructions(catNames) {
-  const file = h('input', { type: 'file', accept: '.csv,text/csv,.txt,text/plain', hidden: true,
+  // No "accept" filter: iPhone greys out .qfx/.ofx files it doesn't recognize. The file is checked when read.
+  const file = h('input', { type: 'file', hidden: true,
     onchange: async e => { const f = e.target.files[0]; if (f) previewImport(f, catNames); e.target.value = ''; } });
   document.body.append(file);
   openSheet({
     title: 'Import from your bank',
     body: [
-      h('p', { class: 'muted' }, 'Download your transactions from your bank as a CSV file, then bring it in here. It takes about 2 minutes.'),
+      h('p', { class: 'muted' }, 'Download your transactions from your bank as a Quicken (QFX/OFX) or CSV file, then bring it in here. It takes about 2 minutes.'),
       h('ol', { class: 'big-steps' }, BANK_STEPS.map(([t, d]) => h('li', {}, h('b', {}, t), h('span', {}, d)))),
       h('details', { class: 'bank-hints' }, h('summary', {}, 'Where it is at popular banks'),
         h('ul', {}, BANK_HINTS.map(([b, d]) => h('li', {}, h('b', {}, b + ': '), d))),
-        h('p', { class: 'hint' }, 'Menus change sometimes. If you can\'t find it, search "[your bank] download transactions CSV".')),
+        h('p', { class: 'hint' }, 'Menus change sometimes. If you can\'t find it, search "[your bank] download transactions QFX" or "… CSV". Tip: stick to one format per account so the same purchase isn\'t imported twice.')),
       h('p', { class: 'hint' }, '🔒 The file is read on this device. Only the date, description and amount are kept, never account numbers. Everything is encrypted with your bank password before it\'s saved.'),
     ],
     actions: [{ label: 'Choose bank file', cls: 'primary', onClick: () => file.click() }],
@@ -287,9 +309,14 @@ function showInstructions(catNames) {
 }
 
 async function previewImport(file, catNames) {
-  let rows;
-  try { rows = parseCSV(await file.text()); } catch { toast('Couldn\'t read that file.'); return; }
-  if (rows.length < 2) { toast('That file looks empty.'); return; }
+  let rows, org = '', ofx = false;
+  try {
+    const text = await file.text();
+    if (/^\s*%PDF|^PK/.test(text.slice(0, 8))) { toast('That\'s a PDF or Excel file. Download QFX/OFX or CSV instead.'); return; }
+    if (isOFX(text)) { ({ rows, org } = parseOFX(text)); ofx = true; }
+    else rows = parseCSV(text);
+  } catch { toast('Couldn\'t read that file.'); return; }
+  if (rows.length < 2) { toast(ofx ? 'No transactions in that file. Try a wider date range.' : 'That file looks empty.'); return; }
   const map = detectColumns(rows);
   const cats = categories(catNames);
   const learned = learnedRules();
@@ -301,7 +328,7 @@ async function previewImport(file, catNames) {
     sel.value = String(map[key]);
     return h('label', { class: 'field' }, h('span', { class: 'field-label' }, label), sel);
   };
-  const account = h('input', { type: 'text', placeholder: 'e.g. Checking, Visa', value: file.name.match(/chase|wells|capital|amex|discover|citi|boa|america first|mountain america/i)?.[0] || '' });
+  const account = h('input', { type: 'text', placeholder: 'e.g. Checking, Visa', value: (org && org.slice(0, 40)) || file.name.match(/chase|wells|capital|amex|discover|citi|boa|america first|mountain america/i)?.[0] || '' });
   const flip = h('input', { type: 'checkbox', onchange: () => draw() });
   const list = h('div', {});
   const summaryEl = h('p', { class: 'muted' });
@@ -321,10 +348,13 @@ async function previewImport(file, catNames) {
       if (!date || amount == null || !desc) continue;
       if (flip.checked) amount = -amount;
       amount = Math.round(amount * 100) / 100;
-      const sig = `${date}|${amount}|${desc}`;
+      let sig = `${date}|${amount}|${desc}`;
       seen[sig] = (seen[sig] || 0) + 1;
+      sig = `${sig}|${seen[sig]}`;
+      const fitid = map.fitid >= 0 ? String(r[map.fitid] || '').trim() : '';
+      if (fitid) sig = `fitid|${fitid}|${date}|${amount}`; // the bank's own id: best for skipping duplicates
       const category = guessCategory(desc, amount, catNames, learned);
-      out.push({ date, amount, desc, sig: `${sig}|${seen[sig]}`, category, include: category !== 'Transfer' });
+      out.push({ date, amount, desc, sig, category, include: category !== 'Transfer' });
     }
     return out;
   }
@@ -355,7 +385,8 @@ async function previewImport(file, catNames) {
     title: 'Check before importing',
     body: [
       summaryEl,
-      h('details', { class: 'bank-hints', open: !parsed.length },
+      ofx ? h('p', { class: 'hint' }, '✓ Quicken/OFX file: dates, amounts and money in/out come straight from your bank.') : null,
+      h('details', { class: 'bank-hints', open: !parsed.length && !ofx },
         h('summary', {}, 'Columns (fix these if things look wrong)'),
         colSelect('date', 'Date'), colSelect('desc', 'Description'),
         colSelect('amount', 'Amount', true), colSelect('debit', '…or Debit / money out', true), colSelect('credit', '…and Credit / money in', true),
