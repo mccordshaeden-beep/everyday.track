@@ -14,7 +14,7 @@ let query = '';
 const SOURCES = [
   { col: 'tasks', mod: 'calendar', tab: 'todo', label: t => (t.classId ? 'Assignment' : 'Task'), title: x => x.title, text: x => `${x.title} ${x.notes || ''} ${x.list || ''}`, sub: x => (x.due ? `Due ${relDay(x.due)}` : '') + (x.done ? ' · done' : '') },
   { col: 'events', mod: 'calendar', label: () => 'Event', title: x => x.title, text: x => `${x.title} ${x.location || ''} ${x.notes || ''}`, sub: x => x.date ? relDay(x.date) : '' },
-  { col: 'notes', mod: 'notes', label: () => 'Note', title: x => x.title || (x.body || '').slice(0, 40), text: x => `${x.title || ''} ${x.body || ''}` },
+  { col: 'notes', mod: 'notes', label: x => (x.kind === 'journal' ? 'Journal' : 'Note'), title: x => (x.kind === 'journal' ? `Journal · ${relDay(x.date)}` : x.title || (x.body || '').slice(0, 40)), text: x => `${x.title || ''} ${x.body || ''} ${x.folder || ''} ${x.highlight || ''} ${x.grateful || ''}`, sub: x => (x.kind === 'journal' ? (x.highlight || (x.body || '').slice(0, 60)) : x.folder ? `📁 ${x.folder}` : '') },
   { col: 'foods', mod: 'food', tab: 'recipes', label: x => (x.kind === 'snack' ? 'Snack' : 'Recipe'), title: x => x.name, text: x => `${x.name} ${x.ingredients || ''} ${x.notes || ''}` },
   { col: 'pantry', mod: 'food', tab: 'pantry', label: x => x.where || 'Pantry', title: x => x.name, text: x => x.name },
   { col: 'groceries', mod: 'food', tab: 'groceries', label: () => 'Grocery list', title: x => x.name, text: x => `${x.name} ${x.note || ''}`, sub: x => (x.got ? 'in cart' : 'to buy') },
@@ -54,6 +54,7 @@ export function render(root, { navigate }) {
   async function go(r) {
     const mod = await import(`./${r.s.mod}.js`);
     if (r.s.tab && mod.setTab) mod.setTab(r.s.tab);
+    if (r.x?.id && mod.focusItem) mod.focusItem(r.x);
     navigate(r.s.mod);
   }
   function draw() {

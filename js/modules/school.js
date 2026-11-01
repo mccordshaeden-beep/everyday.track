@@ -3,6 +3,7 @@
 import * as store from '../store.js';
 import { h, pageHead, card, empty, seg, addBtn, btn, openForm, toast, ymd, addDays, relDay, fmtTime } from '../ui.js';
 import { toggleTask } from './tasks.js';
+import { linkedNotes, showLinked, openNote } from './notes.js';
 import { getStatus, callFunction } from '../sync.js';
 
 export const id = 'school';
@@ -278,6 +279,8 @@ export function render(root, ctx) {
         open.length ? (expanded.has(c.id) ? open : open.slice(0, 6)).map(a => assignmentRow(a, false)) : empty('No open assignments.'),
         h('div', { class: 'btn-row' },
           btn('+ Assignment', () => editAssignment(null, { classId: c.id }), 'ghost sm'),
+          (() => { const n = linkedNotes(`class:${c.id}`).length; return n ? btn(`📝 ${n} note${n > 1 ? 's' : ''}`, () => { showLinked(`class:${c.id}`); ctx.navigate('notes'); }, 'ghost sm')
+            : btn('📝 Notes', () => openNote(null, { title: `${classLabel(c)}: ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`, body: '## Topics\n- \n\n## Key points\n- \n\n## Homework\n- [ ] ', folder: 'School', link: `class:${c.id}` }, ctx.navigate), 'ghost sm'); })(),
           open.length > 6 ? btn(expanded.has(c.id) ? 'Show less' : `Show all ${open.length}`, () => { expanded.has(c.id) ? expanded.delete(c.id) : expanded.add(c.id); ctx.rerender(); }, 'ghost sm') : null));
     }),
     (() => {

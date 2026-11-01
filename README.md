@@ -197,6 +197,21 @@ Pick one goal (Bulk / Maintain / Shred). It changes rep advice and rest times, a
 
 Use the ⚙ button on Today to reorder or hide cards. The old Tasks tab now lives under Calendar → To-do.
 
+## Notes tab
+
+Notes save as you type and are private to your account.
+- **Formatting:** checklists you can tick off, headings, bold, italic, strikethrough, bullets, numbered lists, quotes, links and #tags. The toolbar inserts these for you, and pressing Enter keeps a list going.
+- **Organizing:** folders, colors, pins, and filters by folder or #tag.
+- **Templates:** class notes, study guide, meeting, weekly plan, project plan, packing list, book/movie and brain dump. You can also save your own with "Save as template".
+- **Links:** link a note to a class or event. On each class card, School shows a 📝 button that opens that class's notes.
+- **Journal tab:** one entry per day with a mood, a highlight, what you're grateful for and a daily prompt. It also shows a 4-week mood strip, your streak, and a "Looking back" section (1 week, 1 month and years ago). You can add a Journal card to Today.
+
+**iPhone Notes:** Apple doesn't let other apps read the Notes app, so it can't sync both ways. You can bring notes in two ways, both explained under Notes → 📋 Import:
+- Paste a note.
+- Use an "Add to Everyday" Shortcut in the Share menu. It opens `#/notes?add=1&text=<url-encoded text>`.
+
+The first line of the note becomes the title, and Apple checklist and bullet marks are converted.
+
 ## Sharing
 
 You can share with another Everyday user by their account email, which creates a private space for the two of you, or with your household:

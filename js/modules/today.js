@@ -5,6 +5,7 @@ import { eventsOn, eventRow, setTab as setCalTab } from './calendar.js';
 import { taskRow, quickAdd } from './tasks.js';
 import { habits, habitRow, scheduled } from './habits.js';
 import { todayWorkoutCard } from './workouts.js';
+import { todayJournalCard } from './notes.js';
 import { mealsSummary, editLog, groceryCount, setTab as setFoodTab } from './food.js';
 import { isOn } from './settings.js';
 import { summaryBlock, editTxn, upcomingSubs, billsDueSoon, billRow, setTab as setMoneyTab } from './money.js';
@@ -18,7 +19,7 @@ export const glyph = 'today';
 // ---- layout (which cards, in what order) --------------------------------------------------
 const LAYOUT_ID = 'settings:today';
 const CARDS = [['schedule', '📅 Schedule'], ['todo', '☑ To-do'], ['school', '🎓 School'], ['habits', '🔁 Habits'], ['workout', '💪 Workout'],
-  ['cleaning', '🧽 Cleaning'], ['food', '🍽 Food'], ['money', '💵 Money']];
+  ['cleaning', '🧽 Cleaning'], ['food', '🍽 Food'], ['money', '💵 Money'], ['journal', '📔 Journal']];
 const LABEL = Object.fromEntries(CARDS);
 function getLayout() {
   const saved = store.get(LAYOUT_ID) || {};
@@ -95,6 +96,7 @@ export function render(root, { navigate }) {
         hb.length ? hb.map(x => habitRow(x, today)) : empty('Set up habits like water, sleep or workouts.'));
     },
     workout: () => (isOn('workouts') ? todayWorkoutCard(navigate) : null),
+    journal: () => (isOn('notes') ? todayJournalCard(navigate) : null),
     food: () => {
       if (!isOn('food')) return null;
       const groc = groceryCount();
